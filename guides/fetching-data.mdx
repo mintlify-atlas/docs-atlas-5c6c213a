@@ -1,0 +1,293 @@
+---
+title: 'Fetching Exchange Data'
+description: 'Learn how to fetch company data from different exchanges including HKEX, SGX, and Bloomberg'
+---
+
+## Overview
+
+The Exchanges Metadata project provides specialized fetchers for different exchanges. Each fetcher handles the unique API patterns and data structures of its exchange.
+
+## Available Fetchers
+
+### HKEX (Hong Kong Stock Exchange)
+
+Fetch data from Hong Kong Exchange using the `HKEXCompanyFetcher` class.
+
+<Steps>
+  <Step title="Initialize the fetcher">
+    ```python
+    from hkex_company_list import HKEXCompanyFetcher
+
+    fetcher = HKEXCompanyFetcher()
+    ```
+
+    Optionally pass a custom webhook URL:
+    ```python
+    fetcher = HKEXCompanyFetcher(
+        webhook_url="https://your-webhook-url.com"
+    )
+    ```
+  </Step>
+
+  <Step title="Fetch company list">
+    ```python
+    # Fetch all companies excluding suspended ones
+    companies = fetcher.get_company_list(include_suspended=False)
+
+    # Or include suspended companies
+    companies = fetcher.get_company_list(include_suspended=True)
+    ```
+
+    Each company dictionary contains:
+    - `symbol`: Stock symbol
+    - `name`: Company name
+    - `ric`: Reuters Instrument Code
+    - `last_price`: Last traded price
+    - `market_cap`: Market capitalization (in actual value)
+    - `pe_ratio`: Price-to-earnings ratio
+    - `yield_pct`: Dividend yield percentage
+    - `price_change_pct`: Price change percentage
+    - `net_change`: Net price change
+    - `currency`: Trading currency
+    - `asset_subtype`: Asset classification
+    - `is_suspended`: Suspension status
+  </Step>
+
+  <Step title="Enrich with detailed information">
+    ```python
+    # Add industry classifications and listing details
+    def progress_callback(current, total):
+        print(f"Progress: {current}/{total}")
+
+    companies = fetcher.enrich_with_quote_details(
+        companies,
+        max_workers=5,
+        delay_per_request=0.05,
+        progress_callback=progress_callback
+    )
+    ```
+
+    Enrichment adds:
+    - `industry`: HSIC industry classification
+    - `sector`: HSIC sub-sector classification
+    - `listing_category`: Listing category (e.g., "Primary Listing")
+    - `listing_date`: IPO date
+    - `isin`: International Securities Identification Number
+    - `lot`: Board lot size
+  </Step>
+</Steps>
+
+<Note>
+The HKEX fetcher uses rate limiting to avoid API throttling. Adjust `max_workers` and `delay_per_request` based on your needs.
+</Note>
+
+### SGX (Singapore Exchange)
+
+Fetch data from Singapore Exchange using the `SGXCompanyFetcher` class.
+
+<Steps>
+  <Step title="Initialize the fetcher">
+    ```python
+    from sgx_company_list import SGXCompanyFetcher
+
+    fetcher = SGXCompanyFetcher()
+    ```
+  </Step>
+
+  <Step title="Fetch company list">
+    ```python
+    # Fetch companies excluding those with null names/exchanges
+    companies = fetcher.get_company_list(include_null_companies=False)
+    ```
+
+    Each company dictionary contains:
+    - `symbol`: Stock code
+    - `name`: Company name
+    - `exchange`: Exchange identifier
+    - `exchange_country_code`: Country code
+    - `market_cap`: Market capitalization
+    - `pe_ratio`: Price-to-earnings ratio
+    - `yield_pct`: Dividend yield
+    - `price_to_book_ratio`: Price-to-book ratio
+    - `currency`: Trading currency
+    - `industry`: Industry classification
+    - `is_suspended`: Suspension status
+    - Financial metrics: `sales_ttm`, `net_profit_margin`, `return_on_equity`, `debt_to_equity`
+    - Price changes: `four_week_change_pct`, `thirteen_week_change_pct`, etc.
+  </Step>
+
+  <Step title="Enrich with sector details">
+    ```python
+    companies = fetcher.enrich_with_sector_details(
+        companies,
+        max_workers=5,
+        delay_per_request=0.05,
+        progress_callback=lambda c, t: print(f"{c}/{t}")
+    )
+    ```
+
+    This fetches detailed sector and industry classifications from snapshot reports.
+  </Step>
+</Steps>
+
+### Bloomberg Equities
+
+Fetch company background data from Bloomberg for SGX and HKEX symbols.
+
+<Steps>
+  <Step title="Initialize the fetcher">
+    ```python
+    from bloomberg_sp_company_list import BloombergSPCompanyFetcher
+
+    fetcher = BloombergSPCompanyFetcher()
+    ```
+  </Step>
+
+  <Step title="Fetch background data">
+    ```python
+    # Assuming you have SGX companies from SGXCompanyFetcher
+    results = fetcher.fetch_background_for_companies(
+        companies=sgx_companies,
+        mic="XSES",  # Market Identifier Code
+        delay_per_request=0.1,
+        max_workers=1,
+        request_timeout=8,
+        progress_callback=lambda c, t: print(f"{c}/{t}")
+    )
+    ```
+
+    Each result contains:
+    - `symbol`: Original symbol
+    - `name`: Company name
+    - `mic`: Market Identifier Code ("XSES" for SGX, "XHKG" for HKEX)
+    - `bloomberg_ticker`: Bloomberg ticker format (e.g., "DBS:SP")
+    - `source_url`: Bloomberg API URL
+    - `market_cap`: Market capitalization
+    - `shares_outstanding`: Total shares outstanding
+    - `founded_year`: Year founded
+    - `currency`: Currency code
+    - `fetch_ok`: Whether the fetch succeeded
+  </Step>
+</Steps>
+
+<Warning>
+Bloomberg fetching is sequential and may be slow for large datasets. Use appropriate rate limiting to avoid being blocked.
+</Warning>
+
+## Complete Example
+
+Here's a complete example fetching data from all three sources:
+
+```python
+from hkex_company_list import HKEXCompanyFetcher
+from sgx_company_list import SGXCompanyFetcher
+from bloomberg_sp_company_list import BloombergSPCompanyFetcher
+import json
+
+# Fetch HKEX companies
+print("Fetching HKEX companies...")
+hkex_fetcher = HKEXCompanyFetcher()
+hkex_companies = hkex_fetcher.get_company_list(include_suspended=False)
+hkex_companies = hkex_fetcher.enrich_with_quote_details(
+    hkex_companies,
+    max_workers=5,
+    delay_per_request=0.05
+)
+
+# Fetch SGX companies
+print("Fetching SGX companies...")
+sgx_fetcher = SGXCompanyFetcher()
+sgx_companies = sgx_fetcher.get_company_list(include_null_companies=False)
+sgx_companies = sgx_fetcher.enrich_with_sector_details(
+    sgx_companies,
+    max_workers=5,
+    delay_per_request=0.05
+)
+
+# Enrich with Bloomberg data
+print("Fetching Bloomberg data...")
+bloomberg_fetcher = BloombergSPCompanyFetcher()
+bloomberg_data = bloomberg_fetcher.fetch_background_for_companies(
+    sgx_companies,
+    mic="XSES",
+    delay_per_request=0.1
+)
+
+# Save results
+with open("hkex_companies.json", "w") as f:
+    json.dump(hkex_companies, f, indent=2)
+
+with open("sgx_companies.json", "w") as f:
+    json.dump(sgx_companies, f, indent=2)
+
+with open("bloomberg_data.json", "w") as f:
+    json.dump(bloomberg_data, f, indent=2)
+
+print(f"Fetched {len(hkex_companies)} HKEX companies")
+print(f"Fetched {len(sgx_companies)} SGX companies")
+print(f"Fetched {len(bloomberg_data)} Bloomberg records")
+```
+
+## Understanding Response Data
+
+### Market Cap Calculation
+
+HKEX returns market cap with unit suffixes (K, M, B). The fetcher automatically converts these:
+
+```python
+# Raw data: mktcap="2,227.62", mktcap_u="B"
+# Converted: market_cap=2227620000000.0
+```
+
+### Symbol Formats
+
+Different exchanges use different symbol formats:
+
+- **HKEX**: Numeric codes (e.g., "700", "992")
+- **SGX**: Alphanumeric codes (e.g., "D05", "Z74")
+- **Bloomberg**: Exchange suffix format (e.g., "DBS:SP", "700:HK")
+
+### Suspension Status
+
+Both HKEX and SGX provide suspension status:
+
+```python
+# Filter out suspended companies
+active_companies = [
+    c for c in companies 
+    if not c.get("is_suspended")
+]
+```
+
+## Error Handling
+
+All fetchers return `None` or empty lists on failure:
+
+```python
+companies = fetcher.get_company_list()
+
+if not companies:
+    print("Failed to fetch company list")
+    # Handle error
+else:
+    print(f"Successfully fetched {len(companies)} companies")
+```
+
+For Bloomberg, check the `fetch_ok` field:
+
+```python
+successful = [r for r in results if r.get("fetch_ok")]
+failed = [r for r in results if not r.get("fetch_ok")]
+
+print(f"Successful: {len(successful)}, Failed: {len(failed)}")
+```
+
+## Rate Limiting Best Practices
+
+<Note>
+- **HKEX**: Use `max_workers=5` and `delay_per_request=0.05` for enrichment
+- **SGX**: Use `max_workers=5` and `delay_per_request=0.05` for sector details
+- **Bloomberg**: Use `max_workers=1` and `delay_per_request=0.1` (sequential is safer)
+</Note>
+
+Adjust these parameters based on API response times and rate limit errors.

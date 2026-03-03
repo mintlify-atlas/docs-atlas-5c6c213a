@@ -1,0 +1,198 @@
+---
+title: Installation
+description: Set up Exchanges Metadata and install dependencies
+---
+
+## Requirements
+
+Exchanges Metadata requires Python 3.11 or higher. The toolkit has been tested on Python 3.11, 3.13, and 3.14.
+
+## Install dependencies
+
+<Steps>
+  <Step title="Clone or download the source files">
+    Ensure you have the source Python files in your working directory:
+    
+    - `sgx_company_list.py`
+    - `hkex_company_list.py`
+    - `bloomberg_sp_company_list.py`
+    - `load_exchange_metadata_mysql.py`
+    - `requirements.txt`
+  </Step>
+
+  <Step title="Install Python packages">
+    Install all required dependencies using pip:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    This will install the following packages:
+
+    <Accordion title="View all dependencies">
+      ```text
+      backoff==2.2.1
+      bmll==1.20.5
+      certifi==2026.1.4
+      cffi==2.0.0
+      charset-normalizer==3.4.4
+      cryptography==46.0.5
+      idna==3.11
+      montydb==2.5.6
+      numpy==1.26.4
+      packaging==26.0
+      pandas==2.3.3
+      pycparser==3.0
+      PyJWT==2.11.0
+      PyMySQL==1.1.2
+      python-dateutil==2.9.0.post0
+      pytz==2025.2
+      requests==2.32.5
+      six==1.17.0
+      SQLAlchemy==2.0.46
+      typeguard==4.5.1
+      typing_extensions==4.15.0
+      tzdata==2025.3
+      urllib3==2.6.3
+      ```
+    </Accordion>
+  </Step>
+
+  <Step title="Verify installation">
+    Test that the core modules can be imported:
+
+    ```python
+    from sgx_company_list import SGXCompanyFetcher
+    from hkex_company_list import HKEXCompanyFetcher
+    from bloomberg_sp_company_list import BloombergSPCompanyFetcher
+
+    print("All modules imported successfully!")
+    ```
+  </Step>
+</Steps>
+
+## Key dependencies
+
+<CardGroup cols={2}>
+  <Card title="requests" icon="network-wired">
+    HTTP library for API calls to SGX, HKEX, and Bloomberg endpoints
+  </Card>
+  <Card title="pandas" icon="table">
+    Data manipulation and DataFrame operations for export and database loading
+  </Card>
+  <Card title="SQLAlchemy" icon="database">
+    Database toolkit for MySQL integration with connection pooling
+  </Card>
+  <Card title="PyMySQL" icon="plug">
+    Pure Python MySQL driver used by SQLAlchemy
+  </Card>
+</CardGroup>
+
+## Optional configuration
+
+### Environment variables
+
+You can optionally set environment variables for configuration:
+
+```bash
+# HKEX webhook URL (optional)
+export HKEX_STOCKLIST_WEBHOOK_URL="https://your-webhook-url.com/endpoint"
+```
+
+If not set, the HKEX fetcher will use the default webhook URL.
+
+### Database connection
+
+For MySQL integration, you'll need connection details:
+
+<CodeGroup>
+
+```python Python code
+from sqlalchemy import create_engine
+
+# Format: mysql+pymysql://user:password@host:port/database
+db_url = "mysql+pymysql://username:password@localhost:3306/marketdata?charset=utf8mb4"
+engine = create_engine(db_url)
+```
+
+```bash Command line
+# Or pass via command line argument
+python load_exchange_metadata_mysql.py --db-url "mysql+pymysql://user:pass@host:3306/db"
+```
+
+</CodeGroup>
+
+<Warning>
+  Ensure your MySQL user has CREATE, INSERT, and DROP permissions on the target database if using replace mode.
+</Warning>
+
+## Database setup
+
+If you plan to use the MySQL loading functionality, create the target database:
+
+```sql
+CREATE DATABASE IF NOT EXISTS MarketDataHub CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+The loader will automatically create tables:
+
+- `companies_xses` - SGX company listings
+- `companies_hkex` - HKEX company listings  
+- `companies_bloomberg_equities` - Bloomberg enrichment data
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="SSL certificate errors">
+    If you encounter SSL certificate verification errors, ensure `certifi` is up to date:
+
+    ```bash
+    pip install --upgrade certifi
+    ```
+  </Accordion>
+
+  <Accordion title="MySQL connection issues">
+    Verify your connection string format and ensure the MySQL server is accessible:
+
+    ```python
+    from sqlalchemy import create_engine
+
+    # Test connection
+    engine = create_engine("mysql+pymysql://user:pass@host:3306/db")
+    with engine.connect() as conn:
+        result = conn.execute("SELECT 1")
+        print("Connected successfully!")
+    ```
+  </Accordion>
+
+  <Accordion title="Import errors">
+    If you see `ModuleNotFoundError`, ensure you're in the correct directory with all source files and dependencies are installed:
+
+    ```bash
+    # Verify all source files exist
+    ls -la *.py
+
+    # Reinstall dependencies
+    pip install -r requirements.txt --force-reinstall
+    ```
+  </Accordion>
+
+  <Accordion title="Rate limiting errors">
+    If you encounter rate limiting from SGX or HKEX APIs, adjust the delay parameters:
+
+    ```python
+    # Increase delay between requests
+    companies = fetcher.enrich_with_sector_details(
+        companies,
+        delay_per_request=0.2,  # Increase from default 0.05
+        max_workers=3  # Reduce from default 5
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<Card title="Quickstart guide" icon="rocket" href="/quickstart">
+  Learn how to fetch your first company listing
+</Card>

@@ -1,0 +1,563 @@
+---
+title: 'Filtering Companies'
+description: 'Learn how to filter suspended companies and apply other filtering patterns to exchange data'
+---
+
+## Overview
+
+Filtering is essential for creating clean, usable datasets. This guide covers common filtering patterns including suspension status, listing categories, data quality, and market characteristics.
+
+## Filtering Suspended Companies
+
+### HKEX Suspended Companies
+
+HKEX provides suspension status directly in the company list:
+
+```python
+from hkex_company_list import HKEXCompanyFetcher
+
+fetcher = HKEXCompanyFetcher()
+
+# Option 1: Filter at fetch time (recommended)
+companies = fetcher.get_company_list(include_suspended=False)
+
+# Option 2: Filter manually
+all_companies = fetcher.get_company_list(include_suspended=True)
+active_companies = [
+    c for c in all_companies 
+    if not c.get("is_suspended")
+]
+
+print(f"Total: {len(all_companies)}")
+print(f"Active: {len(active_companies)}")
+print(f"Suspended: {len(all_companies) - len(active_companies)}")
+```
+
+Output:
+```
+Total: 2543
+Active: 2365
+Suspended: 178
+```
+
+### SGX Suspended Companies
+
+SGX requires a separate API call to get suspension status:
+
+```python
+from sgx_company_list import SGXCompanyFetcher
+
+fetcher = SGXCompanyFetcher()
+
+# Fetch company list (includes suspension status)
+companies = fetcher.get_company_list(include_null_companies=False)
+
+# The suspension status is automatically included
+# Filter out suspended
+active_companies = [
+    c for c in companies 
+    if not c.get("is_suspended")
+]
+
+print(f"Total: {len(companies)}")
+print(f"Active: {len(active_companies)}")
+print(f"Suspended: {len(companies) - len(active_companies)}")
+```
+
+### Understanding Suspension Status
+
+Suspended companies are typically:
+- Under investigation
+- Failing to meet listing requirements
+- In financial distress
+- Pending major announcements
+
+<Warning>
+Suspended companies should usually be excluded from analysis and trading systems.
+</Warning>
+
+## Filtering by Listing Category
+
+HKEX companies have different listing categories. "Trading Only" stocks are typically depositary receipts or secondary listings:
+
+```python
+# Filter out "Trading Only" listings
+companies = fetcher.get_company_list(include_suspended=False)
+companies = fetcher.enrich_with_quote_details(companies)
+
+initial_count = len(companies)
+
+# Keep only primary listings
+primary_listings = [
+    c for c in companies 
+    if c.get("listing_category") != "Trading Only"
+]
+
+print(f"Initial: {initial_count}")
+print(f"After filtering: {len(primary_listings)}")
+print(f"Removed: {initial_count - len(primary_listings)}")
+```
+
+### Listing Category Breakdown
+
+```python
+from collections import Counter
+
+# Get category distribution
+categories = Counter(
+    c.get("listing_category") or "Unknown" 
+    for c in companies
+)
+
+print("\nListing Categories:")
+for category, count in categories.most_common():
+    pct = (count / len(companies)) * 100
+    print(f"  {category:<30}: {count:4} ({pct:.1f}%)")
+```
+
+Output:
+```
+Listing Categories:
+  Primary Listing               : 2100 (88.8%)
+  Trading Only                  :  180 ( 7.6%)
+  Secondary Listing             :   85 ( 3.6%)
+```
+
+## Filtering by Data Quality
+
+### Remove Companies with Missing Critical Fields
+
+```python
+# Filter companies with complete industry data
+companies_with_industry = [
+    c for c in companies 
+    if c.get("industry") and c.get("sector")
+]
+
+initial = len(companies)
+filtered = len(companies_with_industry)
+removed = initial - filtered
+
+print(f"Initial: {initial}")
+print(f"With industry data: {filtered}")
+print(f"Removed (null industry): {removed}")
+```
+
+### Multi-Field Quality Filter
+
+```python
+def has_complete_data(company: dict, required_fields: list[str]) -> bool:
+    """Check if company has all required fields with non-null values."""
+    return all(
+        company.get(field) is not None 
+        for field in required_fields
+    )
+
+# Define required fields
+required_fields = [
+    "symbol",
+    "name",
+    "industry",
+    "sector",
+    "market_cap",
+    "listing_category"
+]
+
+# Filter for complete data
+complete_companies = [
+    c for c in companies 
+    if has_complete_data(c, required_fields)
+]
+
+print(f"Total: {len(companies)}")
+print(f"Complete: {len(complete_companies)}")
+print(f"Incomplete: {len(companies) - len(complete_companies)}")
+
+# Show what fields are missing
+for field in required_fields:
+    null_count = sum(
+        1 for c in companies 
+        if c.get(field) is None
+    )
+    if null_count > 0:
+        print(f"  {field}: {null_count} null values")
+```
+
+## Filtering by Market Characteristics
+
+### Filter by Market Capitalization
+
+```python
+# Filter companies above a certain market cap
+min_market_cap = 1_000_000_000  # 1 billion
+
+large_caps = [
+    c for c in companies 
+    if c.get("market_cap") 
+    and c["market_cap"] >= min_market_cap
+]
+
+print(f"Total companies: {len(companies)}")
+print(f"Large caps (>= {min_market_cap/1e9:.0f}B): {len(large_caps)}")
+```
+
+### Market Cap Categories
+
+```python
+def categorize_market_cap(market_cap: float) -> str:
+    """Categorize company by market cap."""
+    if market_cap is None:
+        return "Unknown"
+    elif market_cap >= 10_000_000_000:
+        return "Large Cap (>10B)"
+    elif market_cap >= 2_000_000_000:
+        return "Mid Cap (2B-10B)"
+    elif market_cap >= 300_000_000:
+        return "Small Cap (300M-2B)"
+    else:
+        return "Micro Cap (<300M)"
+
+# Categorize all companies
+for company in companies:
+    company["cap_category"] = categorize_market_cap(
+        company.get("market_cap")
+    )
+
+# Count by category
+from collections import Counter
+categories = Counter(c["cap_category"] for c in companies)
+
+print("\nMarket Cap Distribution:")
+for category, count in categories.most_common():
+    pct = (count / len(companies)) * 100
+    print(f"  {category:<25}: {count:4} ({pct:.1f}%)")
+```
+
+### Filter by Financial Metrics
+
+```python
+# Filter for profitable companies with reasonable P/E ratios
+value_companies = [
+    c for c in companies
+    if c.get("pe_ratio") is not None
+    and 0 < c["pe_ratio"] < 30  # Positive earnings, reasonable valuation
+    and c.get("yield_pct")  # Has dividend yield
+]
+
+print(f"Total: {len(companies)}")
+print(f"Value companies: {len(value_companies)}")
+```
+
+## Complex Filtering Pipeline
+
+Combine multiple filters in a pipeline:
+
+```python
+def filter_pipeline(
+    companies: list[dict],
+    filters: list[tuple[str, callable]]
+) -> dict:
+    """
+    Apply a series of filters and track results.
+    
+    Args:
+        companies: List of company dictionaries
+        filters: List of (name, filter_function) tuples
+    
+    Returns:
+        Dictionary with filtered results and statistics
+    """
+    results = {
+        "initial_count": len(companies),
+        "final_companies": companies,
+        "filters_applied": []
+    }
+    
+    current = companies
+    
+    for filter_name, filter_func in filters:
+        before = len(current)
+        current = [c for c in current if filter_func(c)]
+        after = len(current)
+        removed = before - after
+        
+        results["filters_applied"].append({
+            "name": filter_name,
+            "before": before,
+            "after": after,
+            "removed": removed,
+            "removed_pct": (removed / before * 100) if before > 0 else 0
+        })
+    
+    results["final_companies"] = current
+    results["final_count"] = len(current)
+    results["total_removed"] = results["initial_count"] - results["final_count"]
+    
+    return results
+
+# Define filters
+filters = [
+    ("Remove suspended", lambda c: not c.get("is_suspended")),
+    ("Remove null industry", lambda c: c.get("industry") is not None),
+    ("Remove Trading Only", lambda c: c.get("listing_category") != "Trading Only"),
+    ("Market cap > 100M", lambda c: c.get("market_cap") and c["market_cap"] > 100_000_000),
+    ("Has P/E ratio", lambda c: c.get("pe_ratio") is not None),
+]
+
+# Apply filters
+results = filter_pipeline(companies, filters)
+
+# Print report
+print("\n" + "="*80)
+print("FILTERING PIPELINE RESULTS")
+print("="*80)
+print(f"\nInitial count: {results['initial_count']}")
+
+for filter_info in results["filters_applied"]:
+    print(f"\n{filter_info['name']}:")
+    print(f"  Before: {filter_info['before']}")
+    print(f"  After: {filter_info['after']}")
+    print(f"  Removed: {filter_info['removed']} ({filter_info['removed_pct']:.1f}%)")
+
+print(f"\nFinal count: {results['final_count']}")
+print(f"Total removed: {results['total_removed']} ({results['total_removed']/results['initial_count']*100:.1f}%)")
+print("="*80)
+```
+
+Output:
+```
+================================================================================
+FILTERING PIPELINE RESULTS
+================================================================================
+
+Initial count: 2543
+
+Remove suspended:
+  Before: 2543
+  After: 2365
+  Removed: 178 (7.0%)
+
+Remove null industry:
+  Before: 2365
+  After: 2365
+  Removed: 0 (0.0%)
+
+Remove Trading Only:
+  Before: 2365
+  After: 2185
+  Removed: 180 (7.6%)
+
+Market cap > 100M:
+  Before: 2185
+  After: 1876
+  Removed: 309 (14.1%)
+
+Has P/E ratio:
+  Before: 1876
+  After: 1654
+  Removed: 222 (11.8%)
+
+Final count: 1654
+Total removed: 889 (35.0%)
+================================================================================
+```
+
+## Industry and Sector Filtering
+
+### Filter by Industry
+
+```python
+# Get all unique industries
+industries = set(
+    c.get("industry") 
+    for c in companies 
+    if c.get("industry")
+)
+
+print(f"Total industries: {len(industries)}")
+print("\nIndustries:")
+for industry in sorted(industries):
+    count = sum(1 for c in companies if c.get("industry") == industry)
+    print(f"  {industry}: {count}")
+
+# Filter for specific industries
+tech_industries = [
+    "Information Technology",
+    "Technology",
+    "Telecommunications"
+]
+
+tech_companies = [
+    c for c in companies 
+    if c.get("industry") in tech_industries
+]
+
+print(f"\nTech companies: {len(tech_companies)}")
+```
+
+### Exclude Specific Sectors
+
+```python
+# Exclude sectors you don't want
+excluded_sectors = [
+    "Real Estate Investment Trusts",
+    "Investment Companies",
+    "Closed-End Funds"
+]
+
+filtered_companies = [
+    c for c in companies
+    if c.get("sector") not in excluded_sectors
+]
+
+print(f"Before: {len(companies)}")
+print(f"After: {len(filtered_companies)}")
+print(f"Removed: {len(companies) - len(filtered_companies)}")
+```
+
+## Filtering Bloomberg Results
+
+### Filter Successful Fetches
+
+```python
+from bloomberg_sp_company_list import BloombergSPCompanyFetcher
+
+fetcher = BloombergSPCompanyFetcher()
+results = fetcher.fetch_background_for_companies(
+    companies,
+    mic="XSES",
+    delay_per_request=0.1
+)
+
+# Filter for successful fetches
+successful = [r for r in results if r.get("fetch_ok")]
+failed = [r for r in results if not r.get("fetch_ok")]
+
+print(f"Total: {len(results)}")
+print(f"Successful: {len(successful)}")
+print(f"Failed: {len(failed)}")
+
+# Filter for complete Bloomberg data
+complete_bloomberg = [
+    r for r in successful
+    if r.get("market_cap") 
+    and r.get("shares_outstanding")
+    and r.get("founded_year")
+]
+
+print(f"\nWith complete data: {len(complete_bloomberg)}")
+```
+
+### Filter by Founded Year
+
+```python
+# Filter for established companies (founded before 2010)
+established = [
+    r for r in successful
+    if r.get("founded_year")
+    and r["founded_year"] < 2010
+]
+
+print(f"Established companies (pre-2010): {len(established)}")
+
+# Filter for recent IPOs (founded after 2015)
+recent = [
+    r for r in successful
+    if r.get("founded_year")
+    and r["founded_year"] >= 2015
+]
+
+print(f"Recent companies (2015+): {len(recent)}")
+```
+
+## Saving Filtered Results
+
+```python
+import json
+from datetime import datetime
+
+def save_filtered_results(
+    companies: list[dict],
+    filename: str,
+    filter_description: str
+):
+    """
+    Save filtered results with metadata.
+    """
+    output = {
+        "metadata": {
+            "filtered_at": datetime.utcnow().isoformat(),
+            "filter_description": filter_description,
+            "count": len(companies)
+        },
+        "companies": companies
+    }
+    
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+    
+    print(f"Saved {len(companies)} companies to {filename}")
+
+# Usage
+filtered = [
+    c for c in companies
+    if not c.get("is_suspended")
+    and c.get("industry")
+    and c.get("market_cap") and c["market_cap"] > 500_000_000
+]
+
+save_filtered_results(
+    filtered,
+    "filtered_companies.json",
+    "Active companies with industry data and market cap > 500M"
+)
+```
+
+## Validation After Filtering
+
+Validate your filtered dataset:
+
+```python
+def validate_filtered_data(companies: list[dict]):
+    """
+    Validate filtered dataset meets quality requirements.
+    """
+    issues = []
+    
+    # Check for duplicates
+    symbols = [c.get("symbol") for c in companies]
+    duplicates = len(symbols) - len(set(symbols))
+    if duplicates > 0:
+        issues.append(f"Found {duplicates} duplicate symbols")
+    
+    # Check for suspended companies
+    suspended = sum(1 for c in companies if c.get("is_suspended"))
+    if suspended > 0:
+        issues.append(f"Found {suspended} suspended companies")
+    
+    # Check for null critical fields
+    null_symbols = sum(1 for c in companies if not c.get("symbol"))
+    null_names = sum(1 for c in companies if not c.get("name"))
+    
+    if null_symbols > 0:
+        issues.append(f"Found {null_symbols} companies with null symbols")
+    if null_names > 0:
+        issues.append(f"Found {null_names} companies with null names")
+    
+    # Report
+    if issues:
+        print("\nValidation Issues:")
+        for issue in issues:
+            print(f"  ⚠️  {issue}")
+        return False
+    else:
+        print("\n✓ Validation passed: No issues found")
+        return True
+
+# Usage
+validate_filtered_data(filtered_companies)
+```
+
+<Note>
+Always validate your filtered dataset before using it in production systems or analysis.
+</Note>

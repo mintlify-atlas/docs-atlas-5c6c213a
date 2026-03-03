@@ -1,0 +1,365 @@
+---
+title: 'SGXCompanyFetcher'
+description: 'Fetches company list and information from Singapore Exchange (SGX)'
+---
+
+## Overview
+
+The `SGXCompanyFetcher` class provides methods to fetch comprehensive company data from the Singapore Exchange (SGX) including market capitalization, financial metrics, sector classifications, and suspension status.
+
+## Class Definition
+
+```python
+class SGXCompanyFetcher:
+    """Fetches company list and information from SGX."""
+```
+
+## Initialization
+
+### `__init__()`
+
+Initialize the fetcher with default headers.
+
+```python
+fetcher = SGXCompanyFetcher()
+```
+
+The constructor automatically sets up:
+- A requests session with appropriate headers for SGX API access
+- User agent and security headers for API compatibility
+- Referer set to SGX investors portal
+
+## API Endpoints
+
+The class uses two primary SGX API endpoints:
+
+- `SCREENER_URL`: `https://api.sgx.com/stockscreener/v2.0/all`
+- `SECURITIES_URL`: `https://api.sgx.com/securities/v1.1`
+
+## Methods
+
+### `fetch_stock_screener_data()`
+
+Fetch stock screener data from SGX API.
+
+```python
+def fetch_stock_screener_data(self) -> Optional[dict]
+```
+
+<ResponseField name="return" type="Optional[dict]">
+  Dictionary containing the stock screener response with company financial metrics, or None if the request fails
+</ResponseField>
+
+**Example:**
+
+```python
+fetcher = SGXCompanyFetcher()
+data = fetcher.fetch_stock_screener_data()
+
+if data:
+    companies = data.get("data", [])
+    print(f"Found {len(companies)} companies")
+```
+
+**Response includes:**
+- Company name and stock code
+- Market capitalization
+- P/E ratio, dividend yield
+- Price to book ratio
+- Sector classification
+- Sales, profit margins, ROE
+- Price change percentages (4w, 13w, 26w, 52w)
+
+---
+
+### `fetch_securities_data()`
+
+Fetch securities data including suspension status from SGX API.
+
+```python
+def fetch_securities_data(self) -> Optional[dict]
+```
+
+<ResponseField name="return" type="Optional[dict]">
+  Dictionary containing the securities response with suspension status and trading data, or None if the request fails
+</ResponseField>
+
+**Example:**
+
+```python
+data = fetcher.fetch_securities_data()
+if data:
+    securities = data.get("data", {}).get("prices", [])
+    print(f"Found {len(securities)} securities")
+```
+
+---
+
+### `get_suspension_status()`
+
+Get suspension status for all securities.
+
+```python
+def get_suspension_status(self) -> tuple[dict, int, int]
+```
+
+<ResponseField name="return" type="tuple[dict, int, int]">
+  Tuple containing:
+  - `suspension_map`: Dictionary mapping stock code to suspension status (bool)
+  - `total_securities`: Total number of securities
+  - `suspended_count`: Number of suspended securities
+</ResponseField>
+
+**Example:**
+
+```python
+suspension_map, total, suspended = fetcher.get_suspension_status()
+print(f"Total: {total}, Suspended: {suspended}")
+
+if "D05" in suspension_map:
+    print(f"DBS is suspended: {suspension_map['D05']}")
+```
+
+---
+
+### `fetch_snapshot_report()`
+
+Fetch snapshot report for a stock to get detailed sector/industry information.
+
+```python
+def fetch_snapshot_report(self, stock_code: str) -> Optional[dict]
+```
+
+<ParamField path="stock_code" type="str" required>
+  The stock code to fetch (e.g., "D05" for DBS)
+</ParamField>
+
+<ResponseField name="return" type="Optional[dict]">
+  Dictionary with `sectorName` and `industryName`, or None if fetch failed
+</ResponseField>
+
+**Example:**
+
+```python
+details = fetcher.fetch_snapshot_report("D05")
+if details:
+    print(f"Sector: {details['sectorName']}")
+    print(f"Industry: {details['industryName']}")
+```
+
+---
+
+### `enrich_with_sector_details()`
+
+Enrich company list with detailed sector/industry info from snapshot reports.
+
+```python
+def enrich_with_sector_details(
+    self,
+    companies: list[dict],
+    max_workers: int = 5,
+    delay_per_request: float = 0.05,
+    progress_callback=None
+) -> list[dict]
+```
+
+<ParamField path="companies" type="list[dict]" required>
+  List of company dictionaries to enrich
+</ParamField>
+
+<ParamField path="max_workers" type="int" default={5}>
+  Number of parallel workers for concurrent API requests
+</ParamField>
+
+<ParamField path="delay_per_request" type="float" default={0.05}>
+  Delay in seconds between requests to avoid rate limiting
+</ParamField>
+
+<ParamField path="progress_callback" type="callable" optional>
+  Optional callback function `(completed: int, total: int)` for progress updates
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  Enriched list of companies with updated `industry` and `sector` fields, sorted by symbol
+</ResponseField>
+
+**Example:**
+
+```python
+companies = fetcher.get_company_list()
+
+def show_progress(completed, total):
+    print(f"Progress: {completed}/{total}")
+
+enriched = fetcher.enrich_with_sector_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05,
+    progress_callback=show_progress
+)
+```
+
+---
+
+### `get_company_list()`
+
+Get the list of all companies with their information.
+
+```python
+def get_company_list(self, include_null_companies: bool = False) -> list[dict]
+```
+
+<ParamField path="include_null_companies" type="bool" default={false}>
+  Whether to include companies with null exchange or company name
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  List of company dictionaries with normalized field names
+</ResponseField>
+
+**Example:**
+
+```python
+# Fetch only valid companies (default)
+companies = fetcher.get_company_list()
+
+# Include companies with null fields
+all_companies = fetcher.get_company_list(include_null_companies=True)
+
+for company in companies[:5]:
+    print(f"{company['symbol']}: {company['name']}")
+    print(f"  Market Cap: {company['market_cap']:,.0f}")
+    print(f"  P/E Ratio: {company['pe_ratio']}")
+    print(f"  Industry: {company['industry']}")
+```
+
+**Company Dictionary Fields:**
+
+Each company dictionary contains the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `symbol` | str | Stock code (e.g., "D05") |
+| `name` | str | Company name |
+| `exchange` | str | Exchange identifier |
+| `exchange_country_code` | str | Country code for exchange |
+| `market_cap` | float \| None | Market capitalization in SGD |
+| `pe_ratio` | float \| None | Price to earnings ratio |
+| `yield_pct` | float \| None | Dividend yield percentage |
+| `price_to_book_ratio` | float \| None | Price to book ratio |
+| `currency` | str | Trading currency code |
+| `industry` | str \| None | Industry classification |
+| `sector` | str \| None | Sector classification (from snapshot) |
+| `sales_ttm` | float \| None | Trailing twelve months sales |
+| `net_profit_margin` | float \| None | Net profit margin percentage |
+| `return_on_equity` | float \| None | Return on equity percentage |
+| `price_to_cashflow` | float \| None | Price to cash flow ratio |
+| `debt_to_equity` | float \| None | Debt to equity ratio |
+| `sales_change_pct` | float \| None | Sales change percentage |
+| `four_week_change_pct` | float \| None | 4-week price change % |
+| `thirteen_week_change_pct` | float \| None | 13-week price change % |
+| `twenty_six_week_change_pct` | float \| None | 26-week price change % |
+| `fifty_two_week_change_pct` | float \| None | 52-week price change % |
+| `is_suspended` | bool | Whether the stock is suspended |
+| `listing_category` | str \| None | Listing category |
+
+---
+
+## Private Methods
+
+### `_parse_float()`
+
+Parse a string value to float, handling None and empty strings.
+
+```python
+def _parse_float(self, value) -> Optional[float]
+```
+
+Handles:
+- None values
+- Empty strings
+- "null" string
+- Comma-separated numbers (e.g., "1,234.56")
+- Invalid values (returns None)
+
+## Usage Example
+
+Complete example demonstrating the full workflow:
+
+```python
+from sgx_company_list import SGXCompanyFetcher
+
+# Initialize fetcher
+fetcher = SGXCompanyFetcher()
+
+# Fetch company list (excluding null companies)
+companies = fetcher.get_company_list(include_null_companies=False)
+print(f"Found {len(companies)} companies")
+
+# Filter out suspended companies
+active_companies = [c for c in companies if not c["is_suspended"]]
+print(f"Active companies: {len(active_companies)}")
+
+# Enrich with detailed sector information
+def progress_update(completed, total):
+    progress = completed / total * 100
+    print(f"Enrichment progress: {progress:.1f}%")
+
+enriched_companies = fetcher.enrich_with_sector_details(
+    active_companies,
+    max_workers=5,
+    delay_per_request=0.05,
+    progress_callback=progress_update
+)
+
+# Filter and analyze
+financials = [c for c in enriched_companies if c['industry'] == 'Financials']
+print(f"\nFinancial companies: {len(financials)}")
+
+# Calculate total market cap
+total_mktcap = sum(c['market_cap'] for c in enriched_companies if c['market_cap'])
+print(f"Total market cap: ${total_mktcap / 1e9:.2f}B SGD")
+
+# Find top companies by market cap
+top_companies = sorted(
+    enriched_companies,
+    key=lambda x: x['market_cap'] or 0,
+    reverse=True
+)[:10]
+
+print("\nTop 10 companies by market cap:")
+for i, company in enumerate(top_companies, 1):
+    mktcap_b = company['market_cap'] / 1e9
+    print(f"{i}. {company['name']}: ${mktcap_b:.2f}B")
+```
+
+## Error Handling
+
+All fetch methods return `None` or empty collections on errors:
+
+```python
+data = fetcher.fetch_stock_screener_data()
+if data is None:
+    print("Failed to fetch data")
+    # Handle error appropriately
+
+companies = fetcher.get_company_list()
+if not companies:
+    print("No companies found or fetch failed")
+```
+
+## Rate Limiting
+
+When using `enrich_with_sector_details()`, adjust parameters to avoid rate limiting:
+
+- `max_workers`: Lower values (3-5) reduce concurrent load
+- `delay_per_request`: Increase (0.05-0.1s) to space out requests
+
+```python
+# Conservative settings for large datasets
+enriched = fetcher.enrich_with_sector_details(
+    companies,
+    max_workers=3,
+    delay_per_request=0.1
+)
+```

@@ -1,0 +1,311 @@
+---
+title: Database Loader Functions
+description: Functions for fetching exchange metadata and loading it into MySQL database
+---
+
+The database loader module provides functions to fetch company metadata from SGX, HKEX, and Bloomberg, then write the data to MySQL tables.
+
+## fetch_sgx_companies
+
+Fetches company data from the Singapore Exchange (SGX).
+
+```python
+def fetch_sgx_companies(enrich: bool = True) -> list[dict]
+```
+
+<ParamField path="enrich" type="bool" default="True">
+  Whether to enrich the basic company list with sector details. When enabled, makes additional API calls to fetch industry and sector classification data.
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  List of company dictionaries containing SGX company metadata. Suspended companies are automatically filtered out.
+</ResponseField>
+
+### Behavior
+
+- Automatically filters out suspended companies (`is_suspended=True`)
+- When `enrich=True`, enriches data using 5 concurrent workers with 0.05s delay per request
+- Returns empty list if no companies are found
+
+### Example
+
+```python
+from load_exchange_metadata_mysql import fetch_sgx_companies
+
+# Fetch with enrichment (default)
+sgx_companies = fetch_sgx_companies(enrich=True)
+print(f"Fetched {len(sgx_companies)} SGX companies")
+
+# Fetch without enrichment for faster results
+sgx_companies_basic = fetch_sgx_companies(enrich=False)
+```
+
+## fetch_hkex_companies
+
+Fetches company data from the Hong Kong Exchange (HKEX).
+
+```python
+def fetch_hkex_companies(
+    enrich: bool = True,
+    webhook_url: str | None = None
+) -> list[dict]
+```
+
+<ParamField path="enrich" type="bool" default="True">
+  Whether to enrich the basic company list with quote details. When enabled, makes additional API calls to fetch real-time quote and classification data.
+</ParamField>
+
+<ParamField path="webhook_url" type="str | None" default="None">
+  Optional webhook URL override for the HKEX stock list data source. If not provided, uses the default source.
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  List of company dictionaries containing HKEX company metadata. Suspended companies and trading-only listings are automatically filtered out.
+</ResponseField>
+
+### Behavior
+
+- Automatically filters out suspended companies
+- When `enrich=True`, enriches data using 8 concurrent workers with 0.03s delay per request
+- Filters out companies with `listing_category="Trading Only"` (if category data is available)
+- Filters out companies without industry data (if industry data is available from enrichment)
+
+### Example
+
+```python
+from load_exchange_metadata_mysql import fetch_hkex_companies
+
+# Fetch with enrichment and default source
+hkex_companies = fetch_hkex_companies(enrich=True)
+
+# Fetch from custom webhook URL
+hkex_companies = fetch_hkex_companies(
+    enrich=True,
+    webhook_url="https://example.com/webhook/hkex"
+)
+```
+
+## fetch_bloomberg_equities
+
+Fetches Bloomberg company background data for SGX and HKEX companies.
+
+```python
+def fetch_bloomberg_equities(
+    sgx_companies: list[dict],
+    hkex_companies: list[dict],
+    max_workers: int = 1,
+    delay_per_request: float = 0.0,
+    request_timeout: int = 20,
+) -> tuple[list[dict], list[dict], list[dict], Optional[dict]]
+```
+
+<ParamField path="sgx_companies" type="list[dict]" required>
+  List of SGX company dictionaries from `fetch_sgx_companies()`. Each company must have a `symbol` field.
+</ParamField>
+
+<ParamField path="hkex_companies" type="list[dict]" required>
+  List of HKEX company dictionaries from `fetch_hkex_companies()`. Each company must have a `symbol` field.
+</ParamField>
+
+<ParamField path="max_workers" type="int" default="1">
+  Maximum number of concurrent workers for API requests. Reserved for compatibility; Bloomberg requests run sequentially.
+</ParamField>
+
+<ParamField path="delay_per_request" type="float" default="0.0">
+  Delay in seconds between Bloomberg API requests to avoid rate limiting.
+</ParamField>
+
+<ParamField path="request_timeout" type="int" default="20">
+  Timeout in seconds for each Bloomberg API request.
+</ParamField>
+
+<ResponseField name="return" type="tuple">
+  Returns a 4-element tuple:
+  - `bloomberg_sgx` (list[dict]): Bloomberg data for SGX companies (XSES exchange)
+  - `bloomberg_hk` (list[dict]): Bloomberg data for HKEX companies (XHKG exchange)
+  - `bloomberg_all` (list[dict]): Combined Bloomberg data from both exchanges
+  - `last_debug` (dict | None): Debug information from the last API request, useful for troubleshooting failures
+</ResponseField>
+
+### Behavior
+
+- Automatically deduplicates companies by symbol (case-insensitive)
+- Fetches data for XSES (Singapore) and XHKG (Hong Kong) exchanges
+- Returns debug information for the last request to aid in error diagnosis
+
+### Example
+
+```python
+from load_exchange_metadata_mysql import (
+    fetch_sgx_companies,
+    fetch_hkex_companies,
+    fetch_bloomberg_equities
+)
+
+# Fetch source data
+sgx_rows = fetch_sgx_companies(enrich=True)
+hkex_rows = fetch_hkex_companies(enrich=True)
+
+# Fetch Bloomberg background data
+bloomberg_sgx, bloomberg_hk, bloomberg_all, debug_info = fetch_bloomberg_equities(
+    sgx_companies=sgx_rows,
+    hkex_companies=hkex_rows,
+    max_workers=1,
+    delay_per_request=0.5,
+    request_timeout=30
+)
+
+print(f"SGX Bloomberg records: {len(bloomberg_sgx)}")
+print(f"HKEX Bloomberg records: {len(bloomberg_hk)}")
+print(f"Total Bloomberg records: {len(bloomberg_all)}")
+
+if debug_info:
+    print(f"Last request URL: {debug_info.get('url')}")
+    print(f"Last request status: {debug_info.get('status_code')}")
+```
+
+## write_table
+
+Writes a list of company records to a MySQL table using pandas and SQLAlchemy.
+
+```python
+def write_table(
+    rows: list[dict],
+    table_name: str,
+    engine,
+    if_exists: str,
+    fetched_at_utc: str,
+) -> int
+```
+
+<ParamField path="rows" type="list[dict]" required>
+  List of company dictionaries to write to the database. Each dictionary represents one row.
+</ParamField>
+
+<ParamField path="table_name" type="str" required>
+  Name of the MySQL table to write to (e.g., `companies_xses`, `companies_hkex`, `companies_bloomberg_equities`).
+</ParamField>
+
+<ParamField path="engine" type="sqlalchemy.Engine" required>
+  SQLAlchemy database engine instance created with `create_engine()`.
+</ParamField>
+
+<ParamField path="if_exists" type="str" required>
+  How to behave if the table already exists:
+  - `"replace"`: Drop the table and recreate it
+  - `"append"`: Insert new rows into existing table
+</ParamField>
+
+<ParamField path="fetched_at_utc" type="str" required>
+  UTC timestamp string (ISO format) indicating when the data was fetched. This value is added to all rows as the `fetched_at_utc` column.
+</ParamField>
+
+<ResponseField name="return" type="int">
+  Number of rows successfully written to the database. Returns 0 if the input list is empty.
+</ResponseField>
+
+### Behavior
+
+- Adds a `fetched_at_utc` timestamp column to all rows
+- Automatically serializes complex objects (dict, list) to JSON strings
+- Writes data in chunks of 1000 rows using multi-row inserts for efficiency
+- Skips writing if the input list is empty
+
+### Example
+
+```python
+from datetime import datetime, timezone
+from sqlalchemy import create_engine
+from load_exchange_metadata_mysql import fetch_sgx_companies, write_table
+
+# Setup
+db_url = "mysql+pymysql://user:pass@localhost:3306/database"
+engine = create_engine(db_url)
+fetched_at = datetime.now(timezone.utc).isoformat()
+
+# Fetch and write SGX data
+sgx_companies = fetch_sgx_companies(enrich=True)
+rows_written = write_table(
+    rows=sgx_companies,
+    table_name="companies_xses",
+    engine=engine,
+    if_exists="replace",
+    fetched_at_utc=fetched_at
+)
+
+print(f"Wrote {rows_written} rows to companies_xses")
+```
+
+## Complete Workflow Example
+
+This example shows the complete workflow from the `main()` function:
+
+```python
+from datetime import datetime, timezone
+from sqlalchemy import create_engine
+from load_exchange_metadata_mysql import (
+    fetch_sgx_companies,
+    fetch_hkex_companies,
+    fetch_bloomberg_equities,
+    write_table,
+    DEFAULT_TABLES
+)
+
+# Configuration
+db_url = "mysql+pymysql://user:pass@host:3306/database?charset=utf8mb4"
+fetched_at_utc = datetime.now(timezone.utc).isoformat()
+engine = create_engine(db_url)
+
+# Step 1: Fetch SGX companies
+print("[1/3] Fetching SGX companies...")
+sgx_rows = fetch_sgx_companies(enrich=True)
+print(f"Fetched SGX rows: {len(sgx_rows)}")
+
+loaded_sgx = write_table(
+    sgx_rows,
+    DEFAULT_TABLES["sgx"],  # "companies_xses"
+    engine,
+    "replace",
+    fetched_at_utc,
+)
+print(f"Updated {DEFAULT_TABLES['sgx']}: {loaded_sgx} rows")
+
+# Step 2: Fetch HKEX companies
+print("[2/3] Fetching HKEX companies...")
+hkex_rows = fetch_hkex_companies(enrich=True, webhook_url=None)
+print(f"Fetched HKEX rows: {len(hkex_rows)}")
+
+loaded_hkex = write_table(
+    hkex_rows,
+    DEFAULT_TABLES["hkex"],  # "companies_hkex"
+    engine,
+    "replace",
+    fetched_at_utc,
+)
+print(f"Updated {DEFAULT_TABLES['hkex']}: {loaded_hkex} rows")
+
+# Step 3: Fetch Bloomberg background data
+print("[3/3] Fetching Bloomberg company background...")
+bloomberg_sgx, bloomberg_hk, bloomberg_rows, debug = fetch_bloomberg_equities(
+    sgx_rows,
+    hkex_rows,
+    max_workers=1,
+    delay_per_request=0.0,
+    request_timeout=20,
+)
+
+# Filter to only successful fetches
+bloomberg_rows = [r for r in bloomberg_rows if r.get("fetch_ok")]
+print(f"Fetched Bloomberg rows: {len(bloomberg_rows)}")
+
+loaded_bloomberg = write_table(
+    bloomberg_rows,
+    DEFAULT_TABLES["bloomberg_equities"],  # "companies_bloomberg_equities"
+    engine,
+    "replace",
+    fetched_at_utc,
+)
+print(f"Updated {DEFAULT_TABLES['bloomberg_equities']}: {loaded_bloomberg} rows")
+
+print("Done!")
+```

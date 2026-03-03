@@ -1,0 +1,518 @@
+---
+title: 'Hong Kong Exchange (HKEX)'
+description: 'Fetch company data from Hong Kong Stock Exchange with HSIC classifications'
+icon: 'money-bill'
+---
+
+## Overview
+
+The HKEX data source fetches comprehensive company information from the Hong Kong Stock Exchange, including HSIC (Hang Seng Industry Classification) data, listing categories, and detailed quote information.
+
+<Info>
+  **Data Source**: HKEX official widget API at `www1.hkex.com.hk`
+  
+  **Coverage**: ~2,500 securities on HKEX Main Board and GEM
+</Info>
+
+## Architecture
+
+The HKEX fetcher uses a two-stage approach:
+
+1. **Webhook for Company List**: Fetches the full company list and authentication token
+2. **Quote API for Enrichment**: Fetches detailed information per company using JSONP
+
+### Webhook Endpoint
+
+```python
+# Webhook returns normalized stocklist and authentication token
+WEBHOOK_URL = "https://n8n-auto.deltablock.io/webhook/996f70f0-..."
+```
+
+<Note>
+  The webhook normalizes HKEX's complex nested response structure into a flat stocklist format.
+</Note>
+
+### Quote API
+
+```python
+QUOTE_URL = "https://www1.hkex.com.hk/hkexwidget/data/getequityquote"
+```
+
+**Provides:**
+- HSIC industry and sub-sector classifications
+- Listing category (Primary, GEM, Trading Only)
+- Listing date, ISIN, lot size
+- Company chairman, incorporation location
+
+## Usage Example
+
+<CodeGroup>
+```python Basic Usage
+from hkex_company_list import HKEXCompanyFetcher
+
+# Initialize fetcher
+fetcher = HKEXCompanyFetcher()
+
+# Fetch all active companies (excluding suspended)
+companies = fetcher.get_company_list(include_suspended=False)
+
+print(f"Found {len(companies)} active companies")
+
+# Example company data
+for company in companies[:5]:
+    print(f"{company['symbol']}: {company['name']}")
+    print(f"  Market Cap: {company['market_cap']:,.0f} HKD")
+    print(f"  P/E Ratio: {company['pe_ratio']}")
+    print(f"  Asset Type: {company['asset_subtype']}")
+```
+
+```python With Enrichment
+# Fetch and enrich with detailed quote data
+companies = fetcher.get_company_list(include_suspended=False)
+
+def progress(completed, total):
+    pct = (completed / total) * 100
+    print(f"Progress: {completed}/{total} ({pct:.1f}%)")
+
+enriched = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.1,
+    progress_callback=progress
+)
+
+# Now includes HSIC classifications
+for company in enriched[:5]:
+    print(f"{company['symbol']}: {company['name']}")
+    print(f"  Industry: {company['industry']}")
+    print(f"  Sector: {company['sector']}")
+    print(f"  Listing: {company['listing_category']}")
+```
+
+```python Filter by Listing Category
+# Remove "Trading Only" listings
+companies = fetcher.get_company_list(include_suspended=False)
+
+# Filter out Trading Only and null industry
+filtered = [
+    c for c in companies 
+    if c.get('industry') and 
+    c.get('listing_category') != 'Trading Only'
+]
+
+print(f"Filtered to {len(filtered)} primary listings")
+```
+</CodeGroup>
+
+## Data Fields
+
+The HKEX fetcher returns normalized company dictionaries:
+
+<Tabs>
+  <Tab title="Identification">
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `symbol` | string | Stock code (e.g., "700", "9988") |
+    | `name` | string | Company name |
+    | `ric` | string | Reuters Instrument Code |
+    | `currency` | string | Trading currency (HKD, USD, CNY) |
+    | `isin` | string | ISIN code |
+  </Tab>
+  
+  <Tab title="Market Data">
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `last_price` | float | Last traded price |
+    | `market_cap` | float | Market cap (normalized to base) |
+    | `pe_ratio` | float | Price-to-earnings ratio |
+    | `yield_pct` | float | Dividend yield percentage |
+    | `price_change_pct` | float | Price change percentage |
+    | `net_change` | float | Net price change |
+  </Tab>
+  
+  <Tab title="Classification">
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `industry` | string | HSIC industry classification |
+    | `sector` | string | HSIC sub-sector classification |
+    | `asset_subtype` | string | Asset subtype (Equity, Warrant) |
+    | `listing_category` | string | Primary/GEM/Trading Only |
+    | `listing_date` | string | Date of listing |
+  </Tab>
+  
+  <Tab title="Status & Details">
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `is_suspended` | boolean | Trading suspension status |
+    | `lot` | int | Board lot size |
+  </Tab>
+</Tabs>
+
+## Webhook Response Normalization
+
+The webhook returns a nested structure that gets normalized:
+
+```python
+# From hkex_company_list.py:56-84
+def _find_stocklist_container(self, payload: Any) -> Optional[dict]:
+    """Find the stocklist container in nested payload."""
+    stack = [payload]
+    
+    while stack:
+        current = stack.pop()
+        if isinstance(current, list):
+            for item in current:
+                if isinstance(item, (dict, list)):
+                    stack.append(item)
+            continue
+        
+        if not isinstance(current, dict):
+            continue
+        
+        stocklist = current.get("stocklist")
+        if isinstance(stocklist, list):
+            return current
+        
+        for value in current.values():
+            if isinstance(value, (dict, list)):
+                stack.append(value)
+    
+    return None
+
+def _normalize_hkex_payload(self, payload: Any) -> Optional[dict]:
+    """Normalize webhook payload to standard format."""
+    container = self._find_stocklist_container(payload)
+    if not container:
+        return None
+    return {"data": container}
+```
+
+<Info>
+  The normalization uses depth-first search to locate the stocklist regardless of webhook response structure changes.
+</Info>
+
+## Token Management
+
+HKEX requires authentication tokens for quote API access:
+
+```python
+# From hkex_company_list.py:98-131
+def _find_token_in_payload(self, payload: Any) -> Optional[str]:
+    """
+    Extract authentication token from webhook response.
+    Token can be in multiple locations depending on response format.
+    """
+    # Check top-level token field
+    if isinstance(payload, dict):
+        direct = payload.get("token")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        
+        # Check requestUrl parameter
+        request_url = payload.get("requestUrl")
+        if isinstance(request_url, str) and request_url.strip():
+            parsed = self._extract_token_from_request_url(request_url)
+            if parsed:
+                return parsed
+    
+    # Fallback: DFS through entire payload
+    stack = [payload]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            tok = current.get("token")
+            if isinstance(tok, str) and tok.strip():
+                return tok.strip()
+            # Continue searching...
+    
+    return None
+```
+
+<Warning>
+  Tokens expire periodically. The fetcher automatically refreshes tokens when quote API requests fail.
+</Warning>
+
+## JSONP Response Parsing
+
+The HKEX Quote API returns JSONP format:
+
+```python
+# From hkex_company_list.py:163-187
+def _parse_jsonp(self, response_text: str, callback_name: str) -> dict:
+    """
+    Parse JSONP response to extract JSON data.
+    
+    Args:
+        response_text: The raw JSONP response
+        callback_name: The callback function name used in the request
+    
+    Returns:
+        Parsed JSON data as a dictionary
+    """
+    # Match pattern: callbackName({...})
+    pattern = rf"{re.escape(callback_name)}\((.*)\)"
+    match = re.search(pattern, response_text, re.DOTALL)
+    
+    if match:
+        json_str = match.group(1)
+        return json.loads(json_str)
+    else:
+        # Try a more generic pattern for any callback
+        pattern = r"\w+\((.*)\)$"
+        match = re.search(pattern, response_text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        raise ValueError("Could not parse JSONP response")
+```
+
+## Enrichment Process
+
+```python
+# From hkex_company_list.py:326-394
+def enrich_with_quote_details(
+    self, 
+    companies: list[dict], 
+    max_workers: int = 5,
+    delay_per_request: float = 0.1,
+    progress_callback=None
+) -> list[dict]:
+    """
+    Enrich company list with detailed quote information.
+    
+    Args:
+        companies: List of company dictionaries
+        max_workers: Number of parallel workers for fetching
+        delay_per_request: Delay in seconds between requests
+        progress_callback: Optional callback function for progress updates
+    
+    Returns:
+        Enriched list of companies with industry classifications
+    """
+    total = len(companies)
+    completed = 0
+    lock = threading.Lock()
+    
+    def fetch_and_enrich(company: dict) -> dict:
+        nonlocal completed
+        
+        # Add delay to avoid rate limiting
+        time.sleep(delay_per_request)
+        
+        symbol = company["symbol"]
+        details = self.fetch_quote_details(symbol)
+        
+        if details:
+            company.update({
+                "industry": details.get("hsic_ind_classification"),
+                "sector": details.get("hsic_sub_sector_classification"),
+                "listing_category": details.get("listing_category"),
+                "listing_date": details.get("listing_date"),
+                "isin": details.get("isin"),
+                "lot": details.get("lot"),
+            })
+        else:
+            company.update({
+                "industry": None,
+                "sector": None,
+                "listing_category": None,
+                "listing_date": None,
+                "isin": None,
+                "lot": None,
+            })
+        
+        with lock:
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total)
+        
+        return company
+    
+    # Use ThreadPoolExecutor with rate limiting
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fetch_and_enrich, c): c for c in companies}
+        enriched = []
+        for future in as_completed(futures):
+            enriched.append(future.result())
+    
+    # Sort back by symbol
+    enriched.sort(key=lambda x: int(x["symbol"]) if x["symbol"].isdigit() else float('inf'))
+    
+    return enriched
+```
+
+<Note>
+  HKEX enrichment requires 100ms delay per request (vs 50ms for SGX) due to stricter rate limiting.
+</Note>
+
+## Filtering Logic
+
+Recommended filtering for production:
+
+```python
+# From hkex_company_list.py:456-476
+initial_count = len(companies)
+
+# Remove companies with null industry classification
+companies = [c for c in companies if c.get("industry")]
+after_industry_filter = len(companies)
+removed_industry = initial_count - after_industry_filter
+
+# Remove companies with "Trading Only" listing category
+companies = [c for c in companies if c.get("listing_category") != "Trading Only"]
+after_trading_filter = len(companies)
+removed_trading = after_industry_filter - after_trading_filter
+
+print(f"Initial count: {initial_count}")
+print(f"Removed (null industry): {removed_industry}")
+print(f"Removed (Trading Only): {removed_trading}")
+print(f"Final count: {len(companies)}")
+```
+
+## Example Response
+
+```json
+{
+  "symbol": "700",
+  "name": "TENCENT",
+  "ric": "0700.HK",
+  "last_price": 382.6,
+  "market_cap": 3654200000000.0,
+  "pe_ratio": 28.5,
+  "yield_pct": 0.35,
+  "price_change_pct": 1.25,
+  "net_change": 4.8,
+  "currency": "HKD",
+  "asset_subtype": "Equity",
+  "is_suspended": false,
+  "industry": "Technology",
+  "sector": "Internet Services",
+  "listing_category": "Primary Listing",
+  "listing_date": "2004-06-16",
+  "isin": "KYG875721634",
+  "lot": 100
+}
+```
+
+## HSIC Classifications
+
+HKEX uses Hang Seng Industry Classification Standard:
+
+<AccordionGroup>
+  <Accordion title="Industry Level (Top-level)">
+    Examples:
+    - Technology
+    - Financials
+    - Consumer Goods
+    - Healthcare
+    - Industrials
+    - Properties & Construction
+    - Energy
+    - Materials
+    - Utilities
+    - Telecommunications
+  </Accordion>
+  
+  <Accordion title="Sub-sector Level (Detailed)">
+    Examples under Technology:
+    - Internet Services
+    - Software & Computer Services
+    - Hardware & Equipment
+    - Semiconductors
+    
+    Examples under Financials:
+    - Banks
+    - Investment Services
+    - Insurance
+    - Real Estate
+  </Accordion>
+</AccordionGroup>
+
+## Data Quality Statistics
+
+<CardGroup cols={3}>
+  <Card title="Industry Coverage" icon="industry">
+    ~85% after filtering (null removed)
+  </Card>
+  <Card title="Sector Coverage" icon="layer-group">
+    ~80% have sub-sector classification
+  </Card>
+  <Card title="Listing Category" icon="list">
+    100% after enrichment
+  </Card>
+</CardGroup>
+
+## Market Cap Calculation
+
+HKEX returns market cap with unit suffixes:
+
+```python
+# From hkex_company_list.py:299-306
+mktcap_raw = self._parse_float(stock.get("mktcap", ""))
+mktcap_unit = stock.get("mktcap_u", "")
+market_cap = None
+if mktcap_raw is not None:
+    unit_multipliers = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
+    multiplier = unit_multipliers.get(mktcap_unit, 1)
+    market_cap = mktcap_raw * multiplier
+```
+
+<Info>
+  Market cap is automatically normalized to base values (e.g., 365.42B → 365420000000.0)
+</Info>
+
+## Rate Limiting
+
+```python
+# Recommended configuration
+fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.1  # 100ms delay
+)
+
+# For smaller datasets (<100 companies)
+fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=10,
+    delay_per_request=0.05  # 50ms delay
+)
+```
+
+<Warning>
+  HKEX rate limiting is more aggressive than SGX. Stick to 100ms delays for datasets >500 companies.
+</Warning>
+
+## Error Handling
+
+Automatic token refresh on failure:
+
+```python
+# From hkex_company_list.py:239-254
+try:
+    response = self.session.get(self.QUOTE_URL, params=params, timeout=15)
+    response.raise_for_status()
+    data = self._parse_jsonp(response.text, callback_name)
+except (requests.RequestException, json.JSONDecodeError, ValueError):
+    # One retry after refreshing token from webhook
+    self.fetch_companies_from_webhook()
+    if not self._quote_token:
+        return None
+    params["token"] = self._quote_token
+    try:
+        response = self.session.get(self.QUOTE_URL, params=params, timeout=15)
+        response.raise_for_status()
+        data = self._parse_jsonp(response.text, callback_name)
+    except (requests.RequestException, json.JSONDecodeError, ValueError):
+        return None
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SGX Data Source" icon="dollar-sign" href="/data-sources/sgx">
+    Compare with Singapore Exchange data
+  </Card>
+  <Card title="Bloomberg Enrichment" icon="chart-line" href="/data-sources/bloomberg">
+    Enrich HKEX data with Bloomberg backgrounds
+  </Card>
+</CardGroup>

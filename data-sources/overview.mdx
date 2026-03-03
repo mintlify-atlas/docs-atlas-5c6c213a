@@ -1,0 +1,135 @@
+---
+title: 'Data Sources Overview'
+description: 'Overview of all supported exchange metadata data sources'
+icon: 'database'
+---
+
+## Supported Data Sources
+
+The Exchanges Metadata project aggregates company data from multiple financial market data sources to provide comprehensive coverage of Asian exchanges.
+
+<CardGroup cols={2}>
+  <Card title="Singapore Exchange (SGX)" icon="building-columns" href="/data-sources/sgx">
+    Official SGX API providing real-time company data, financial metrics, and sector classifications
+  </Card>
+  <Card title="Hong Kong Exchange (HKEX)" icon="building-columns" href="/data-sources/hkex">
+    HKEX official data with HSIC industry classifications and detailed quote information
+  </Card>
+  <Card title="Bloomberg" icon="chart-line" href="/data-sources/bloomberg">
+    Bloomberg market data API for enriched company backgrounds and historical information
+  </Card>
+</CardGroup>
+
+## Data Coverage
+
+Each data source provides unique fields and coverage:
+
+| Data Source | Primary Use | Key Fields | Update Frequency |
+|------------|-------------|------------|------------------|
+| **SGX** | Primary SGX listings | Market cap, P/E ratio, financial ratios, sector data | Real-time |
+| **HKEX** | Primary HKEX listings | HSIC classifications, listing categories, quotes | Real-time |
+| **Bloomberg** | Background enrichment | Founded year, shares outstanding, market cap | On-demand |
+
+## Common Data Fields
+
+All data sources are normalized to provide consistent field names:
+
+<AccordionGroup>
+  <Accordion title="Identification Fields">
+    - `symbol` - Stock ticker symbol
+    - `name` - Company name
+    - `exchange` - Exchange code (XSES, XHKG)
+    - `currency` - Trading currency
+  </Accordion>
+  
+  <Accordion title="Market Data">
+    - `market_cap` - Market capitalization (normalized to base currency)
+    - `pe_ratio` - Price-to-earnings ratio
+    - `yield_pct` - Dividend yield percentage
+    - `price_to_book_ratio` - Price-to-book ratio
+  </Accordion>
+  
+  <Accordion title="Classification">
+    - `industry` - Industry classification
+    - `sector` - Sector/sub-sector classification
+    - `listing_category` - Listing type/category
+  </Accordion>
+  
+  <Accordion title="Status">
+    - `is_suspended` - Trading suspension status
+    - `listing_date` - Date of listing
+  </Accordion>
+</AccordionGroup>
+
+## Data Quality
+
+<Info>
+  All data sources implement automatic filtering to remove:
+  - Suspended securities
+  - Companies with null industry classifications
+  - Trading-only listings (HKEX)
+  - Invalid or incomplete records
+</Info>
+
+## API Rate Limiting
+
+Each data source implements rate limiting to ensure reliable data fetching:
+
+<CodeGroup>
+```python SGX
+# SGX: 5 parallel workers with 50ms delay
+fetcher.enrich_with_sector_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05
+)
+```
+
+```python HKEX
+# HKEX: 5 parallel workers with 100ms delay
+fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.1
+)
+```
+
+```python Bloomberg
+# Bloomberg: Sequential with 100ms delay
+fetcher.fetch_background_for_companies(
+    companies,
+    max_workers=1,
+    delay_per_request=0.1
+)
+```
+</CodeGroup>
+
+## Error Handling
+
+All fetchers implement robust error handling:
+
+- **Network errors**: Automatic retry with exponential backoff
+- **JSON parsing errors**: Graceful fallback to null values
+- **Rate limiting**: Configurable delays between requests
+- **Token expiration**: Automatic token refresh (HKEX)
+
+<Warning>
+  Bloomberg data fetching is sequential to avoid rate limiting. For large datasets, expect longer processing times.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SGX Data Source" icon="dollar-sign" href="/data-sources/sgx">
+    Learn about SGX-specific data fields and APIs
+  </Card>
+  <Card title="HKEX Data Source" icon="money-bill" href="/data-sources/hkex">
+    Explore HKEX HSIC classifications and webhook data
+  </Card>
+  <Card title="Bloomberg Data" icon="chart-line" href="/data-sources/bloomberg">
+    Understand Bloomberg enrichment capabilities
+  </Card>
+  <Card title="Fetching Data" icon="download" href="/guides/fetching-data">
+    Learn how to fetch data from exchanges
+  </Card>
+</CardGroup>

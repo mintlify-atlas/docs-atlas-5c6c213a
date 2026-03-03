@@ -1,0 +1,410 @@
+---
+title: Data Models & Table Schemas
+description: Database schemas for SGX, HKEX, and Bloomberg company tables
+---
+
+The Exchanges Metadata system stores company data in three primary MySQL tables. Each table has a common `fetched_at_utc` timestamp column that tracks when the data was retrieved.
+
+## Common Fields
+
+All tables include the following system-generated field:
+
+<ResponseField name="fetched_at_utc" type="string">
+  ISO 8601 UTC timestamp indicating when the data was fetched and loaded into the database. Automatically added by the `write_table()` function.
+</ResponseField>
+
+## companies_xses
+
+Stores company metadata from the Singapore Exchange (SGX/XSES).
+
+### Table Name
+
+```python
+DEFAULT_TABLES["sgx"] = "companies_xses"
+```
+
+### Schema
+
+<ResponseField name="symbol" type="string">
+  Company trading symbol on SGX (e.g., "D05", "C38U"). Used as the primary identifier for the company.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Full legal or trading name of the company.
+</ResponseField>
+
+<ResponseField name="is_suspended" type="boolean">
+  Indicates whether trading is suspended. Note: Suspended companies are filtered out during fetching, so this field is typically `false` or absent.
+</ResponseField>
+
+<ResponseField name="industry" type="string">
+  Industry classification (available when enrichment is enabled).
+</ResponseField>
+
+<ResponseField name="sector" type="string">
+  Sector classification (available when enrichment is enabled).
+</ResponseField>
+
+<ResponseField name="subsector" type="string">
+  Sub-sector classification (available when enrichment is enabled).
+</ResponseField>
+
+<ResponseField name="market_cap" type="number">
+  Market capitalization value (available when enrichment is enabled).
+</ResponseField>
+
+### Data Source
+
+Fetched using `fetch_sgx_companies()` from `SGXCompanyFetcher`.
+
+### Enrichment
+
+When `enrich=True`:
+- Calls `enrich_with_sector_details()` with 5 concurrent workers
+- Adds detailed industry, sector, and subsector classifications
+- Delay: 0.05 seconds per request
+
+### Example Record
+
+```json
+{
+  "symbol": "D05",
+  "name": "DBS Group Holdings Ltd",
+  "is_suspended": false,
+  "industry": "Financials",
+  "sector": "Banks",
+  "subsector": "Banks",
+  "market_cap": 95000000000,
+  "fetched_at_utc": "2026-03-03T10:30:00.123456+00:00"
+}
+```
+
+### Usage
+
+```python
+from load_exchange_metadata_mysql import fetch_sgx_companies, DEFAULT_TABLES
+
+sgx_companies = fetch_sgx_companies(enrich=True)
+print(f"Table: {DEFAULT_TABLES['sgx']}")
+print(f"Records: {len(sgx_companies)}")
+print(f"Sample: {sgx_companies[0]}")
+```
+
+## companies_hkex
+
+Stores company metadata from the Hong Kong Exchange (HKEX).
+
+### Table Name
+
+```python
+DEFAULT_TABLES["hkex"] = "companies_hkex"
+```
+
+### Schema
+
+<ResponseField name="symbol" type="string">
+  Company stock code on HKEX (e.g., "0001", "0700"). Used as the primary identifier for the company.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Full company name as registered on HKEX.
+</ResponseField>
+
+<ResponseField name="listing_category" type="string">
+  Category of listing (e.g., "Equity", "Trading Only"). Companies with `listing_category="Trading Only"` are filtered out during fetching.
+</ResponseField>
+
+<ResponseField name="industry" type="string">
+  Industry classification (available when enrichment is enabled). Companies without industry data are filtered out if enrichment provides industry information.
+</ResponseField>
+
+<ResponseField name="sector" type="string">
+  Sector classification (available when enrichment is enabled).
+</ResponseField>
+
+<ResponseField name="market_cap" type="number">
+  Market capitalization in HKD (available when enrichment is enabled).
+</ResponseField>
+
+<ResponseField name="quote_data" type="object (JSON string)">
+  Additional quote details as a JSON object, serialized to a string. May include real-time pricing, volume, and other trading metrics.
+</ResponseField>
+
+### Data Source
+
+Fetched using `fetch_hkex_companies()` from `HKEXCompanyFetcher`.
+
+### Enrichment
+
+When `enrich=True`:
+- Calls `enrich_with_quote_details()` with 8 concurrent workers
+- Adds industry, sector, market cap, and real-time quote information
+- Delay: 0.03 seconds per request
+
+### Filtering Rules
+
+1. Suspended companies are excluded (`include_suspended=False`)
+2. If industry data is available, companies without industry are excluded
+3. If listing category data is available, `listing_category="Trading Only"` companies are excluded
+
+### Example Record
+
+```json
+{
+  "symbol": "0700",
+  "name": "TENCENT HOLDINGS LTD",
+  "listing_category": "Equity",
+  "industry": "Information Technology",
+  "sector": "Interactive Media & Services",
+  "market_cap": 3800000000000,
+  "quote_data": "{\"price\": 385.2, \"volume\": 12500000}",
+  "fetched_at_utc": "2026-03-03T10:30:00.123456+00:00"
+}
+```
+
+### Usage
+
+```python
+from load_exchange_metadata_mysql import fetch_hkex_companies, DEFAULT_TABLES
+
+hkex_companies = fetch_hkex_companies(
+    enrich=True,
+    webhook_url=None  # Use default source
+)
+print(f"Table: {DEFAULT_TABLES['hkex']}")
+print(f"Records: {len(hkex_companies)}")
+print(f"Sample: {hkex_companies[0]}")
+```
+
+## companies_bloomberg_equities
+
+Stores Bloomberg background data for companies from both SGX and HKEX exchanges.
+
+### Table Name
+
+```python
+DEFAULT_TABLES["bloomberg_equities"] = "companies_bloomberg_equities"
+```
+
+### Schema
+
+<ResponseField name="symbol" type="string">
+  Company trading symbol from the source exchange (SGX or HKEX).
+</ResponseField>
+
+<ResponseField name="ticker" type="string">
+  Bloomberg ticker identifier (e.g., "D05 SP Equity", "700 HK Equity").
+</ResponseField>
+
+<ResponseField name="exchange" type="string">
+  Bloomberg exchange code:
+  - `"XSES"` for Singapore Exchange companies
+  - `"XHKG"` for Hong Kong Exchange companies
+</ResponseField>
+
+<ResponseField name="fetch_ok" type="boolean">
+  Indicates whether the Bloomberg API request was successful. Only records with `fetch_ok=true` are written to the database.
+</ResponseField>
+
+<ResponseField name="company_name" type="string">
+  Official company name from Bloomberg.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Detailed company description and background from Bloomberg.
+</ResponseField>
+
+<ResponseField name="industry" type="string">
+  Bloomberg industry classification.
+</ResponseField>
+
+<ResponseField name="sector" type="string">
+  Bloomberg sector classification.
+</ResponseField>
+
+<ResponseField name="country" type="string">
+  Country of incorporation or headquarters.
+</ResponseField>
+
+<ResponseField name="website" type="string">
+  Company website URL.
+</ResponseField>
+
+<ResponseField name="employees" type="number">
+  Number of employees.
+</ResponseField>
+
+<ResponseField name="founded_year" type="number">
+  Year the company was founded.
+</ResponseField>
+
+<ResponseField name="executives" type="array (JSON string)">
+  List of key executives and officers, serialized as a JSON string. Each executive entry may include name, title, and other details.
+</ResponseField>
+
+<ResponseField name="metadata" type="object (JSON string)">
+  Additional Bloomberg metadata as a JSON object, serialized to a string.
+</ResponseField>
+
+### Data Source
+
+Fetched using `fetch_bloomberg_equities()` from `BloombergSPCompanyFetcher`.
+
+### Data Processing
+
+1. **Deduplication**: Input companies are deduplicated by symbol (case-insensitive)
+2. **Exchange Mapping**: 
+   - SGX companies → `XSES` exchange code
+   - HKEX companies → `XHKG` exchange code
+3. **Filtering**: Only records with `fetch_ok=true` are saved to the database
+4. **Serialization**: Complex fields (arrays, objects) are serialized to JSON strings
+
+### Example Record
+
+```json
+{
+  "symbol": "D05",
+  "ticker": "D05 SP Equity",
+  "exchange": "XSES",
+  "fetch_ok": true,
+  "company_name": "DBS Group Holdings Ltd",
+  "description": "DBS Group Holdings Ltd is a Singapore-based commercial bank...",
+  "industry": "Banking",
+  "sector": "Financials",
+  "country": "Singapore",
+  "website": "https://www.dbs.com",
+  "employees": 32000,
+  "founded_year": 1968,
+  "executives": "[{\"name\": \"Piyush Gupta\", \"title\": \"CEO\"}]",
+  "metadata": "{\"market_cap_usd\": 68000000000}",
+  "fetched_at_utc": "2026-03-03T10:30:00.123456+00:00"
+}
+```
+
+### Usage
+
+```python
+from load_exchange_metadata_mysql import (
+    fetch_sgx_companies,
+    fetch_hkex_companies,
+    fetch_bloomberg_equities,
+    DEFAULT_TABLES
+)
+
+# Fetch source data
+sgx_rows = fetch_sgx_companies(enrich=True)
+hkex_rows = fetch_hkex_companies(enrich=True)
+
+# Fetch Bloomberg data
+sgx_bloomberg, hk_bloomberg, all_bloomberg, debug = fetch_bloomberg_equities(
+    sgx_companies=sgx_rows,
+    hkex_companies=hkex_rows,
+    max_workers=1,
+    delay_per_request=0.5,
+    request_timeout=20
+)
+
+# Filter to successful fetches only
+successful_records = [r for r in all_bloomberg if r.get("fetch_ok")]
+
+print(f"Table: {DEFAULT_TABLES['bloomberg_equities']}")
+print(f"Total fetched: {len(all_bloomberg)}")
+print(f"Successful: {len(successful_records)}")
+print(f"Sample: {successful_records[0] if successful_records else 'No records'}")
+```
+
+## Object Serialization
+
+The `write_table()` function automatically serializes complex data types:
+
+```python
+def serialize_objects(df: pd.DataFrame) -> pd.DataFrame:
+    for col in df.columns:
+        if df[col].dtype == "object":
+            df[col] = df[col].map(
+                lambda v: json.dumps(v, ensure_ascii=False)
+                if isinstance(v, (dict, list))
+                else v
+            )
+    return df
+```
+
+### Behavior
+
+- **dict** and **list** objects are serialized to JSON strings using `json.dumps()`
+- Uses `ensure_ascii=False` to preserve Unicode characters
+- Other object types are left unchanged
+- Applied automatically before writing to the database
+
+### Example
+
+```python
+# Before serialization
+record = {
+    "symbol": "0700",
+    "executives": [{"name": "Ma Huateng", "title": "Chairman"}],
+    "metadata": {"founded": 1998}
+}
+
+# After serialization (in database)
+# executives: '[{"name": "Ma Huateng", "title": "Chairman"}]'
+# metadata: '{"founded": 1998}'
+```
+
+## Database Configuration
+
+The default database connection uses MySQL with the PyMySQL driver:
+
+```python
+DEFAULT_DB_URL = (
+    "mysql+pymysql://user:password@host:port/database?charset=utf8mb4"
+)
+```
+
+### Connection String Format
+
+```
+mysql+pymysql://[user]:[password]@[host]:[port]/[database]?charset=utf8mb4
+```
+
+### Character Set
+
+The `charset=utf8mb4` parameter ensures proper handling of:
+- International characters
+- Emojis
+- Extended Unicode characters
+
+### Creating Engine
+
+```python
+from sqlalchemy import create_engine
+
+db_url = "mysql+pymysql://user:pass@localhost:3306/MarketDataHub?charset=utf8mb4"
+engine = create_engine(db_url)
+```
+
+## Write Modes
+
+The `if_exists` parameter in `write_table()` controls table behavior:
+
+### Replace Mode
+
+```python
+write_table(rows, "companies_xses", engine, if_exists="replace", fetched_at_utc=timestamp)
+```
+
+- Drops the existing table
+- Creates a new table with fresh schema
+- Inserts all rows
+- **Use case**: Full data refresh
+
+### Append Mode
+
+```python
+write_table(rows, "companies_xses", engine, if_exists="append", fetched_at_utc=timestamp)
+```
+
+- Keeps existing table and data
+- Inserts new rows at the end
+- **Use case**: Incremental updates or historical tracking
+- **Note**: May create duplicates if the same data is appended multiple times

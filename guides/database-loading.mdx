@@ -1,0 +1,446 @@
+---
+title: 'Loading Data into MySQL'
+description: 'Learn how to load exchange metadata into MySQL database using the provided loader script'
+---
+
+## Overview
+
+The `load_exchange_metadata_mysql.py` script provides a complete pipeline for fetching exchange data and loading it into MySQL. It handles SGX, HKEX, and Bloomberg data sources.
+
+## Database Schema
+
+The script creates three main tables:
+
+- `companies_xses`: SGX company data
+- `companies_hkex`: HKEX company data
+- `companies_bloomberg_equities`: Bloomberg enrichment data
+
+Each table includes a `fetched_at_utc` timestamp column for tracking data freshness.
+
+## Quick Start
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    pip install pandas sqlalchemy pymysql
+    ```
+  </Step>
+
+  <Step title="Run the loader">
+    ```bash
+    python load_exchange_metadata_mysql.py \
+      --db-url "mysql+pymysql://user:password@host:3306/database" \
+      --if-exists replace
+    ```
+  </Step>
+</Steps>
+
+## Command Line Options
+
+### Database Connection
+
+```bash
+--db-url "mysql+pymysql://user:password@host:3306/database?charset=utf8mb4"
+```
+
+The database URL follows SQLAlchemy format:
+- Protocol: `mysql+pymysql`
+- Credentials: `user:password`
+- Host and port: `host:3306`
+- Database name: `database`
+- Options: `?charset=utf8mb4` (recommended for Unicode support)
+
+<Warning>
+URL-encode special characters in passwords. For example, `@` becomes `%40`.
+</Warning>
+
+### Write Mode
+
+```bash
+--if-exists [replace|append]
+```
+
+- `replace`: Drop and recreate the table (default)
+- `append`: Add new rows to existing table
+
+### Enrichment Control
+
+```bash
+--skip-enrichment
+```
+
+Skip API calls for enrichment data (industry classifications, sector details). Use this for faster updates when enrichment data isn't needed.
+
+### HKEX Configuration
+
+```bash
+--hkex-webhook-url "https://your-webhook-url.com"
+```
+
+Override the default HKEX webhook URL for fetching company lists.
+
+### Bloomberg Configuration
+
+```bash
+--bloomberg-workers 1
+--bloomberg-delay 0.1
+--bloomberg-timeout 20
+```
+
+- `--bloomberg-workers`: Number of parallel workers (default: 1, sequential is safer)
+- `--bloomberg-delay`: Delay in seconds between requests (default: 0.0)
+- `--bloomberg-timeout`: Request timeout in seconds (default: 20)
+
+## Complete Usage Examples
+
+### Basic Load with Default Settings
+
+```bash
+python load_exchange_metadata_mysql.py \
+  --db-url "mysql+pymysql://user:pass@localhost:3306/marketdata"
+```
+
+This will:
+1. Fetch SGX companies with enrichment
+2. Fetch HKEX companies with enrichment
+3. Fetch Bloomberg data for both exchanges
+4. Replace all three tables
+
+### Fast Load Without Enrichment
+
+```bash
+python load_exchange_metadata_mysql.py \
+  --db-url "mysql+pymysql://user:pass@localhost:3306/marketdata" \
+  --skip-enrichment
+```
+
+Skips enrichment API calls for faster execution.
+
+### Append Mode for Incremental Updates
+
+```bash
+python load_exchange_metadata_mysql.py \
+  --db-url "mysql+pymysql://user:pass@localhost:3306/marketdata" \
+  --if-exists append
+```
+
+<Note>
+Append mode adds new rows without removing old ones. Consider implementing a cleanup strategy for stale data.
+</Note>
+
+### Custom Bloomberg Rate Limiting
+
+```bash
+python load_exchange_metadata_mysql.py \
+  --db-url "mysql+pymysql://user:pass@localhost:3306/marketdata" \
+  --bloomberg-delay 0.2 \
+  --bloomberg-timeout 30
+```
+
+## Understanding the Load Process
+
+The script executes in three phases:
+
+<Steps>
+  <Step title="Phase 1: Fetch SGX Companies">
+    ```python
+    # Fetches from SGX API
+    sgx_companies = fetch_sgx_companies(enrich=True)
+    
+    # Filters:
+    # - Excludes null companies (no exchange or name)
+    # - Excludes suspended companies
+    
+    # If enrich=True, adds:
+    # - Detailed sector classifications
+    # - Industry names from snapshot reports
+    ```
+    
+    Output: `companies_xses` table
+  </Step>
+
+  <Step title="Phase 2: Fetch HKEX Companies">
+    ```python
+    # Fetches from HKEX webhook
+    hkex_companies = fetch_hkex_companies(
+        enrich=True,
+        webhook_url=None  # Uses default if None
+    )
+    
+    # Filters:
+    # - Excludes suspended companies
+    # - Excludes companies without industry data (if available)
+    # - Excludes "Trading Only" listing category
+    ```
+    
+    Output: `companies_hkex` table
+  </Step>
+
+  <Step title="Phase 3: Fetch Bloomberg Data">
+    ```python
+    # Enriches both SGX and HKEX symbols with Bloomberg data
+    bloomberg_data = fetch_bloomberg_equities(
+        sgx_companies=sgx_companies,
+        hkex_companies=hkex_companies,
+        max_workers=1,
+        delay_per_request=0.0,
+        request_timeout=20
+    )
+    
+    # Only keeps records where fetch_ok=True
+    # Combines SGX (suffix :SP) and HKEX (suffix :HK) tickers
+    ```
+    
+    Output: `companies_bloomberg_equities` table
+  </Step>
+</Steps>
+
+## Data Processing Details
+
+### Object Serialization
+
+Complex objects (dicts, lists) are automatically serialized to JSON:
+
+```python
+def serialize_objects(df: pd.DataFrame) -> pd.DataFrame:
+    for col in df.columns:
+        if df[col].dtype == "object":
+            df[col] = df[col].map(
+                lambda v: json.dumps(v, ensure_ascii=False)
+                if isinstance(v, (dict, list))
+                else v
+            )
+    return df
+```
+
+### Timestamp Tracking
+
+All records include a UTC timestamp:
+
+```python
+fetched_at_utc = datetime.now(timezone.utc).isoformat()
+df["fetched_at_utc"] = fetched_at_utc
+```
+
+Query example:
+```sql
+SELECT * FROM companies_xses 
+WHERE fetched_at_utc >= DATE_SUB(NOW(), INTERVAL 1 DAY);
+```
+
+### Batch Writing
+
+Data is written in chunks for efficiency:
+
+```python
+df.to_sql(
+    table_name,
+    con=engine,
+    if_exists=if_exists,
+    index=False,
+    chunksize=1000,  # Process 1000 rows at a time
+    method="multi"   # Use multi-row INSERT statements
+)
+```
+
+## Programmatic Usage
+
+You can import and use the functions directly:
+
+```python
+from load_exchange_metadata_mysql import (
+    fetch_sgx_companies,
+    fetch_hkex_companies,
+    fetch_bloomberg_equities,
+    write_table
+)
+from sqlalchemy import create_engine
+from datetime import datetime, timezone
+
+# Setup
+engine = create_engine(
+    "mysql+pymysql://user:pass@host:3306/database"
+)
+fetched_at_utc = datetime.now(timezone.utc).isoformat()
+
+# Fetch data
+sgx_companies = fetch_sgx_companies(enrich=True)
+hkex_companies = fetch_hkex_companies(enrich=True)
+
+bloomberg_sgx, bloomberg_hk, bloomberg_all, debug = fetch_bloomberg_equities(
+    sgx_companies,
+    hkex_companies,
+    max_workers=1,
+    delay_per_request=0.1,
+    request_timeout=20
+)
+
+# Filter Bloomberg results
+bloomberg_success = [
+    r for r in bloomberg_all 
+    if r.get("fetch_ok")
+]
+
+# Write to database
+write_table(
+    sgx_companies,
+    "companies_xses",
+    engine,
+    "replace",
+    fetched_at_utc
+)
+
+write_table(
+    hkex_companies,
+    "companies_hkex",
+    engine,
+    "replace",
+    fetched_at_utc
+)
+
+write_table(
+    bloomberg_success,
+    "companies_bloomberg_equities",
+    engine,
+    "replace",
+    fetched_at_utc
+)
+
+print(f"Loaded {len(sgx_companies)} SGX companies")
+print(f"Loaded {len(hkex_companies)} HKEX companies")
+print(f"Loaded {len(bloomberg_success)} Bloomberg records")
+```
+
+## Error Handling
+
+The script continues execution even if individual phases fail:
+
+```python
+try:
+    sgx_rows = fetch_sgx_companies(enrich=enrich)
+    if not sgx_rows:
+        raise RuntimeError("returned 0 rows")
+    # Write to database...
+except Exception as e:
+    failures.append(f"SGX failed: {e}")
+    print(f"❌ SGX failed: {e}")
+```
+
+Check the exit code:
+- `0`: Success
+- `2`: One or more phases failed
+
+## Monitoring and Logging
+
+The script provides detailed console output:
+
+```
+================================================================================
+Exchange Metadata to MySQL
+================================================================================
+Fetched at UTC: 2026-03-03T10:30:45.123456+00:00
+
+[1/3] Fetching SGX companies...
+   Fetching suspension status...
+   Securities API: 750 total, 12 suspended
+Fetched SGX rows: 738
+Updated companies_xses: 738 rows
+
+[2/3] Fetching HKEX companies from webhook...
+HKEX webhook returned 2543 rows.
+Fetched HKEX rows: 2365
+Updated companies_hkex: 2365 rows
+
+[3/3] Fetching Bloomberg company background (SGX + HKEX)...
+Fetched Bloomberg rows: SGX=738, HKEX=2365, kept=2890, ok=2890
+Updated companies_bloomberg_equities: 2890 rows
+
+================================================================================
+Done
+Table companies_xses: 738 rows
+Table companies_hkex: 2365 rows
+Table companies_bloomberg_equities: 2890 rows
+================================================================================
+```
+
+## Troubleshooting
+
+### Connection Issues
+
+**Problem**: `OperationalError: (2003, "Can't connect to MySQL server")`
+
+**Solution**: Check database URL, credentials, and network access:
+```bash
+mysql -h host -u user -p database
+```
+
+### Character Encoding Issues
+
+**Problem**: Unicode characters not displaying correctly
+
+**Solution**: Ensure database and tables use UTF-8:
+```sql
+ALTER DATABASE MarketDataHub CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+And include `charset=utf8mb4` in the connection URL.
+
+### Rate Limiting
+
+**Problem**: Bloomberg requests failing with HTTP 429
+
+**Solution**: Increase delay between requests:
+```bash
+python load_exchange_metadata_mysql.py \
+  --bloomberg-delay 0.5 \
+  --bloomberg-timeout 30
+```
+
+### Memory Issues
+
+**Problem**: Script crashes with large datasets
+
+**Solution**: The script already uses chunked writes (`chunksize=1000`). If issues persist, process exchanges separately or increase available memory.
+
+## Scheduling Automated Updates
+
+### Using Cron
+
+```bash
+# Update daily at 2 AM
+0 2 * * * /usr/bin/python3 /path/to/load_exchange_metadata_mysql.py \
+  --db-url "mysql+pymysql://user:pass@host:3306/db" \
+  >> /var/log/exchange_loader.log 2>&1
+```
+
+### Using systemd Timer
+
+Create `/etc/systemd/system/exchange-loader.service`:
+```ini
+[Unit]
+Description=Load Exchange Metadata
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /path/to/load_exchange_metadata_mysql.py \
+  --db-url "mysql+pymysql://user:pass@host:3306/db"
+```
+
+Create `/etc/systemd/system/exchange-loader.timer`:
+```ini
+[Unit]
+Description=Daily Exchange Metadata Update
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable and start:
+```bash
+sudo systemctl enable exchange-loader.timer
+sudo systemctl start exchange-loader.timer
+```

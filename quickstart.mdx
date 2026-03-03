@@ -1,80 +1,429 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Fetch SGX company listings in under 5 minutes
 ---
 
-## Get started in three steps
+## Fetch SGX companies
 
-Get your documentation site running locally and make your first customization.
+This guide walks through fetching company listings from the Singapore Exchange (SGX) with full market data enrichment.
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Import the fetcher">
+    Start by importing the `SGXCompanyFetcher` class:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+    ```python
+    from sgx_company_list import SGXCompanyFetcher
+
+    # Initialize the fetcher
+    fetcher = SGXCompanyFetcher()
+    ```
+
+    The fetcher automatically configures HTTP headers for SGX API compatibility.
+  </Step>
+
+  <Step title="Fetch company list">
+    Retrieve all active companies from SGX:
+
+    ```python
+    # Fetch all companies (excluding null exchange/name)
+    companies = fetcher.get_company_list(include_null_companies=False)
+
+    # Filter out suspended companies
+    companies = [c for c in companies if not c["is_suspended"]]
+
+    print(f"Found {len(companies)} active companies")
+    ```
+
+    <Info>
+      The `get_company_list()` method automatically calls both the stock screener API and securities API to include suspension status.
+    </Info>
+  </Step>
+
+  <Step title="Enrich with sector details">
+    Add detailed sector and industry classifications:
+
+    ```python
+    def progress_update(completed, total):
+        progress = completed / total
+        print(f"Progress: {completed}/{total} ({progress*100:.1f}%)")
+
+    companies = fetcher.enrich_with_sector_details(
+        companies,
+        max_workers=5,
+        delay_per_request=0.05,
+        progress_callback=progress_update
+    )
+    ```
+
+    This makes additional API calls to fetch detailed sector/industry data for each company.
+  </Step>
+
+  <Step title="Export results">
+    Save the data to JSON:
+
+    ```python
+    import json
+
+    with open("sgx_companies.json", "w", encoding="utf-8") as f:
+        json.dump(companies, f, indent=2, ensure_ascii=False)
+
+    print(f"Exported {len(companies)} companies to sgx_companies.json")
+    ```
+  </Step>
+</Steps>
+
+## Complete example
+
+Here's a complete script to fetch and export SGX companies:
+
+<CodeGroup>
+
+```python Basic example
+from sgx_company_list import SGXCompanyFetcher
+import json
+
+# Initialize fetcher
+fetcher = SGXCompanyFetcher()
+
+# Fetch companies
+print("Fetching company list...")
+companies = fetcher.get_company_list(include_null_companies=False)
+
+# Filter suspended companies
+companies = [c for c in companies if not c["is_suspended"]]
+print(f"Found {len(companies)} active companies")
+
+# Enrich with sector details
+print("Enriching with sector details...")
+companies = fetcher.enrich_with_sector_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05,
+    progress_callback=lambda c, t: print(f"Progress: {c}/{t}")
+)
+
+# Export to JSON
+with open("sgx_companies.json", "w", encoding="utf-8") as f:
+    json.dump(companies, f, indent=2, ensure_ascii=False)
+
+print("Done!")
+```
+
+```python With filtering
+from sgx_company_list import SGXCompanyFetcher
+import json
+
+fetcher = SGXCompanyFetcher()
+
+# Fetch and filter companies
+companies = fetcher.get_company_list(include_null_companies=False)
+companies = [c for c in companies if not c["is_suspended"]]
+
+# Filter by market cap (> 100M SGD)
+companies = [
+    c for c in companies 
+    if c.get("market_cap") and c["market_cap"] > 100_000_000
+]
+
+# Filter by P/E ratio (< 20)
+companies = [
+    c for c in companies 
+    if c.get("pe_ratio") and c["pe_ratio"] < 20
+]
+
+print(f"Found {len(companies)} companies matching criteria")
+
+# Enrich and export
+companies = fetcher.enrich_with_sector_details(companies, max_workers=5)
+with open("filtered_sgx.json", "w") as f:
+    json.dump(companies, f, indent=2)
+```
+
+```python Run as script
+if __name__ == "__main__":
+    from sgx_company_list import main
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    # This runs the full demo with statistics
+    main()
+```
 
-### Step 2: Deploy your changes
+</CodeGroup>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
+## Data structure
+
+Each company dictionary contains the following fields:
+
+<ResponseField name="symbol" type="string" required>
+  Stock code (e.g., "D05" for DBS Group Holdings)
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Company name
+</ResponseField>
+
+<ResponseField name="exchange" type="string">
+  Exchange code (typically "XSES" for SGX)
+</ResponseField>
+
+<ResponseField name="market_cap" type="float">
+  Market capitalization in SGD
+</ResponseField>
+
+<ResponseField name="pe_ratio" type="float">
+  Price-to-earnings ratio
+</ResponseField>
+
+<ResponseField name="yield_pct" type="float">
+  Dividend yield as percentage
+</ResponseField>
+
+<ResponseField name="industry" type="string">
+  Industry classification (enriched from snapshot reports)
+</ResponseField>
+
+<ResponseField name="sector" type="string">
+  Sector classification (enriched from snapshot reports)
+</ResponseField>
+
+<ResponseField name="is_suspended" type="boolean">
+  Whether the company is currently suspended from trading
+</ResponseField>
+
+<ResponseField name="currency" type="string">
+  Trading currency code
+</ResponseField>
+
+<Accordion title="View all available fields">
+  Additional financial metrics:
+  
+  - `sales_ttm` - Trailing twelve months sales
+  - `net_profit_margin` - Net profit margin percentage
+  - `return_on_equity` - Return on equity percentage
+  - `price_to_cashflow` - Price to cash flow per share ratio
+  - `debt_to_equity` - Total debt to total equity ratio
+  - `sales_change_pct` - Sales percentage change
+  
+  Price change metrics:
+  
+  - `four_week_change_pct` - 4-week price change percentage
+  - `thirteen_week_change_pct` - 13-week price change percentage
+  - `twenty_six_week_change_pct` - 26-week price change percentage
+  - `fifty_two_week_change_pct` - 52-week price change percentage
+  
+  Metadata:
+  
+  - `exchange_country_code` - Country code for the exchange
+  - `listing_category` - Type of listing
+  - `price_to_book_ratio` - Price to book ratio
 </Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Example output
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+Here's what a typical company record looks like:
 
-### Step 3: Go live
+```json
+{
+  "symbol": "D05",
+  "name": "DBS GROUP HOLDINGS LTD",
+  "exchange": "XSES",
+  "exchange_country_code": "SG",
+  "market_cap": 98765432100.0,
+  "pe_ratio": 12.5,
+  "yield_pct": 4.2,
+  "price_to_book_ratio": 1.3,
+  "currency": "SGD",
+  "industry": "Financials",
+  "sector": "Banks",
+  "sales_ttm": 15432100000.0,
+  "net_profit_margin": 42.5,
+  "return_on_equity": 15.8,
+  "price_to_cashflow": 8.5,
+  "debt_to_equity": 0.15,
+  "sales_change_pct": 8.2,
+  "four_week_change_pct": 2.3,
+  "thirteen_week_change_pct": 5.7,
+  "twenty_six_week_change_pct": 12.4,
+  "fifty_two_week_change_pct": 18.9,
+  "is_suspended": false,
+  "listing_category": "Primary Listing"
+}
+```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+## Understanding the APIs
+
+The SGX fetcher uses two main APIs:
+
+<CardGroup cols={2}>
+  <Card title="Stock screener API" icon="filter">
+    Provides bulk company data including market cap, P/E ratios, financial metrics, and price changes
+    
+    **Endpoint**: `https://api.sgx.com/stockscreener/v2.0/all`
+  </Card>
+  
+  <Card title="Securities API" icon="shield-check">
+    Provides suspension status for all securities
+    
+    **Endpoint**: `https://api.sgx.com/securities/v1.1`
+  </Card>
+  
+  <Card title="Snapshot reports API" icon="file-chart-column">
+    Provides detailed sector and industry classifications per company
+    
+    **Endpoint**: `https://api.sgx.com/snapshotreports/v2.0/countryCode/SGP/stockCode/{code}`
+  </Card>
+  
+  <Card title="Rate limiting" icon="clock">
+    The fetcher implements delays between requests to avoid rate limiting
+    
+    **Default**: 50ms per enrichment request with 5 parallel workers
+  </Card>
+</CardGroup>
+
+## Advanced usage
+
+### Custom filtering
+
+Filter companies based on multiple criteria:
+
+```python
+def filter_companies(companies):
+    """Filter high-quality dividend stocks."""
+    return [
+        c for c in companies
+        if c.get("market_cap", 0) > 500_000_000  # > 500M SGD
+        and c.get("yield_pct", 0) > 3.0  # > 3% yield
+        and c.get("pe_ratio", 999) < 15  # P/E < 15
+        and not c.get("is_suspended", True)  # Not suspended
+        and c.get("debt_to_equity", 999) < 1.0  # Low debt
+    ]
+
+filtered = filter_companies(companies)
+print(f"Found {len(filtered)} high-quality dividend stocks")
+```
+
+### Market statistics
+
+Analyze market composition:
+
+```python
+# Calculate total market cap
+total_market_cap = sum(c.get("market_cap", 0) for c in companies)
+print(f"Total market cap: {total_market_cap / 1e9:.2f}B SGD")
+
+# Industry breakdown
+from collections import Counter
+industries = Counter(c.get("industry", "Unknown") for c in companies)
+for industry, count in industries.most_common(10):
+    print(f"{industry}: {count} companies")
+
+# Top companies by market cap
+top_10 = sorted(
+    companies, 
+    key=lambda x: x.get("market_cap", 0), 
+    reverse=True
+)[:10]
+
+for i, company in enumerate(top_10, 1):
+    cap = company.get("market_cap", 0) / 1e9
+    print(f"{i}. {company['name']}: {cap:.2f}B SGD")
+```
+
+## Performance tips
+
+<Tip>
+  **Parallel enrichment**: The default `max_workers=5` balances speed and rate limiting. Increase for faster enrichment, decrease if you encounter rate limit errors.
+</Tip>
+
+<Tip>
+  **Skip enrichment**: If you don't need detailed sector data, skip the `enrich_with_sector_details()` call to fetch data much faster.
+</Tip>
+
+<Tip>
+  **Caching**: Save fetched data to avoid repeated API calls. The data typically changes daily.
+</Tip>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Fetch HKEX companies" icon="building" href="#hkex-example">
+    Learn how to fetch Hong Kong Exchange listings
+  </Card>
+  <Card title="Bloomberg enrichment" icon="database" href="#bloomberg-example">
+    Add Bloomberg market metadata
+  </Card>
+  <Card title="Database loading" icon="upload" href="#database-example">
+    Sync data to MySQL database
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## HKEX example
+
+Fetching HKEX companies follows a similar pattern:
+
+```python
+from hkex_company_list import HKEXCompanyFetcher
+
+# Initialize fetcher
+fetcher = HKEXCompanyFetcher()
+
+# Fetch companies (excluding suspended)
+companies = fetcher.get_company_list(include_suspended=False)
+
+# Enrich with quote details (industry, sector, listing category)
+companies = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.1
+)
+
+# Filter out null industry and "Trading Only" listings
+companies = [
+    c for c in companies 
+    if c.get("industry") and c.get("listing_category") != "Trading Only"
+]
+
+print(f"Found {len(companies)} HKEX companies")
+```
+
+## Bloomberg example
+
+Enrich SGX companies with Bloomberg data:
+
+```python
+from sgx_company_list import SGXCompanyFetcher
+from bloomberg_sp_company_list import BloombergSPCompanyFetcher
+
+# Fetch SGX companies
+sgx_fetcher = SGXCompanyFetcher()
+sgx_companies = sgx_fetcher.get_company_list()
+
+# Enrich with Bloomberg data
+bloomberg_fetcher = BloombergSPCompanyFetcher()
+bloomberg_data = bloomberg_fetcher.fetch_background_for_companies(
+    sgx_companies,
+    mic="XSES",
+    delay_per_request=0.1
+)
+
+# Bloomberg data includes: market_cap, shares_outstanding, founded_year
+for company in bloomberg_data:
+    if company["fetch_ok"]:
+        print(f"{company['name']}: Founded {company.get('founded_year')}")
+```
+
+## Database example
+
+Load all data into MySQL:
+
+```bash
+python load_exchange_metadata_mysql.py \
+  --db-url "mysql+pymysql://user:pass@localhost:3306/marketdata" \
+  --if-exists replace
+```
+
+This will:
+1. Fetch SGX companies with sector enrichment
+2. Fetch HKEX companies with quote enrichment  
+3. Enrich both with Bloomberg data
+4. Load all three datasets into separate MySQL tables
+5. Add `fetched_at_utc` timestamps to track data freshness

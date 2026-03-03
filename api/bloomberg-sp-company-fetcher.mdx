@@ -1,0 +1,613 @@
+---
+title: 'BloombergSPCompanyFetcher'
+description: 'Fetches SGX company background data from Bloomberg API'
+---
+
+## Overview
+
+The `BloombergSPCompanyFetcher` class provides methods to fetch company background data from Bloomberg's API using Singapore Exchange (SGX) symbols. It converts SGX symbols to Bloomberg's ticker format (e.g., `D05:SP`) and retrieves additional company information such as market capitalization, shares outstanding, and founding year.
+
+## Class Definition
+
+```python
+class BloombergSPCompanyFetcher:
+    """Fetches SGX company background data from Bloomberg."""
+```
+
+## Initialization
+
+### `__init__()`
+
+Initialize the fetcher with default headers for Bloomberg API.
+
+```python
+fetcher = BloombergSPCompanyFetcher()
+```
+
+The constructor automatically sets up:
+- A requests session with appropriate headers for Bloomberg API access
+- User agent headers for browser compatibility
+- Accept headers for JSON responses
+- Referer set to Bloomberg markets portal
+- Thread-safe debug info storage for request troubleshooting
+
+## API Endpoint
+
+The class uses Bloomberg's quote API:
+
+- `BASE_URL`: `https://www.bloomberg.com/markets2/api/quote/EQT`
+
+## Methods
+
+### `normalize_symbol()`
+
+Normalize a stock symbol to uppercase without whitespace.
+
+```python
+@staticmethod
+def normalize_symbol(symbol: str) -> str
+```
+
+<ParamField path="symbol" type="str" required>
+  Stock symbol to normalize (e.g., "d05", " D05 ")
+</ParamField>
+
+<ResponseField name="return" type="str">
+  Normalized symbol in uppercase without whitespace (e.g., "D05")
+</ResponseField>
+
+**Example:**
+
+```python
+symbol = BloombergSPCompanyFetcher.normalize_symbol(" d05 ")
+print(symbol)  # "D05"
+```
+
+---
+
+### `to_bloomberg_ticker()`
+
+Convert a stock symbol to Bloomberg ticker format.
+
+```python
+def to_bloomberg_ticker(self, symbol: str, suffix: str = "SP") -> str
+```
+
+<ParamField path="symbol" type="str" required>
+  Stock symbol (e.g., "D05")
+</ParamField>
+
+<ParamField path="suffix" type="str" default="SP">
+  Bloomberg suffix ("SP" for Singapore, "HK" for Hong Kong)
+</ParamField>
+
+<ResponseField name="return" type="str">
+  Bloomberg ticker format (e.g., "D05:SP")
+</ResponseField>
+
+**Example:**
+
+```python
+fetcher = BloombergSPCompanyFetcher()
+
+# Singapore ticker
+sgx_ticker = fetcher.to_bloomberg_ticker("D05")
+print(sgx_ticker)  # "D05:SP"
+
+# Hong Kong ticker
+hk_ticker = fetcher.to_bloomberg_ticker("700", suffix="HK")
+print(hk_ticker)  # "700:HK"
+```
+
+---
+
+### `fetch_quote()`
+
+Fetch quote data from Bloomberg for a specific symbol.
+
+```python
+def fetch_quote(self, symbol: str, suffix: str = "SP") -> Optional[dict]
+```
+
+<ParamField path="symbol" type="str" required>
+  Stock symbol to fetch (e.g., "D05")
+</ParamField>
+
+<ParamField path="suffix" type="str" default="SP">
+  Bloomberg suffix for the ticker
+</ParamField>
+
+<ResponseField name="return" type="Optional[dict]">
+  Raw Bloomberg quote data as dictionary, or None if request failed
+</ResponseField>
+
+**Example:**
+
+```python
+fetcher = BloombergSPCompanyFetcher()
+quote = fetcher.fetch_quote("D05")
+
+if quote:
+    print("Quote data received")
+    # Process Bloomberg response
+```
+
+---
+
+### `ticker_candidates()`
+
+Generate possible Bloomberg ticker candidates for a symbol.
+
+```python
+def ticker_candidates(self, symbol: str, mic: str) -> list[str]
+```
+
+<ParamField path="symbol" type="str" required>
+  Stock symbol (e.g., "D05", "5")
+</ParamField>
+
+<ParamField path="mic" type="str" required>
+  Market Identifier Code ("XSES" for SGX, "XHKG" for HKEX)
+</ParamField>
+
+<ResponseField name="return" type="list[str]">
+  List of Bloomberg ticker candidates to try
+</ResponseField>
+
+**Example:**
+
+```python
+fetcher = BloombergSPCompanyFetcher()
+
+# SGX symbol
+sgx_candidates = fetcher.ticker_candidates("D05", "XSES")
+print(sgx_candidates)  # ["D05:SP"]
+
+# HKEX symbol (numeric)
+hkex_candidates = fetcher.ticker_candidates("5", "XHKG")
+print(hkex_candidates)  # ["0005:HK", "5:HK"]
+
+# HKEX symbol (already padded)
+hkex_candidates2 = fetcher.ticker_candidates("0700", "XHKG")
+print(hkex_candidates2)  # ["0700:HK"]
+```
+
+**Notes:**
+- For HKEX symbols, generates both zero-padded (4 digits) and non-padded versions
+- For SGX symbols, uses `:SP` suffix
+- Handles numeric symbols by zero-padding for HKEX
+
+---
+
+### `fetch_quote_with_candidates()`
+
+Fetch quote data trying multiple ticker candidates.
+
+```python
+def fetch_quote_with_candidates(
+    self,
+    symbol: str,
+    candidates: list[str],
+    timeout: int = 8,
+) -> tuple[Optional[dict], Optional[str]]
+```
+
+<ParamField path="symbol" type="str" required>
+  Original stock symbol for debug logging
+</ParamField>
+
+<ParamField path="candidates" type="list[str]" required>
+  List of Bloomberg ticker candidates to try
+</ParamField>
+
+<ParamField path="timeout" type="int" default={8}>
+  Request timeout in seconds
+</ParamField>
+
+<ResponseField name="return" type="tuple[Optional[dict], Optional[str]]">
+  Tuple of (quote_data, matched_ticker) where:
+  - `quote_data`: Bloomberg quote dictionary or None
+  - `matched_ticker`: The ticker that successfully returned data, or None
+</ResponseField>
+
+**Example:**
+
+```python
+fetcher = BloombergSPCompanyFetcher()
+
+# Generate candidates for HKEX symbol
+candidates = fetcher.ticker_candidates("5", "XHKG")
+
+# Try all candidates
+quote, matched = fetcher.fetch_quote_with_candidates(
+    symbol="5",
+    candidates=candidates,
+    timeout=10
+)
+
+if quote:
+    print(f"Matched ticker: {matched}")
+    # Process quote data
+else:
+    print("No matching ticker found")
+    # Check debug info
+    debug = fetcher.get_last_request_debug()
+    if debug:
+        print(f"Last error: {debug['error']}")
+```
+
+**Notes:**
+- Tries each candidate in order until one succeeds
+- Stores debug information for each attempt
+- Returns on first successful match
+
+---
+
+### `fetch_background_for_companies()`
+
+Fetch Bloomberg background data for a list of companies.
+
+```python
+def fetch_background_for_companies(
+    self,
+    companies: list[dict],
+    mic: str = "XSES",
+    delay_per_request: float = 0.1,
+    max_workers: int = 1,
+    request_timeout: int = 8,
+    progress_callback=None,
+) -> list[dict]
+```
+
+<ParamField path="companies" type="list[dict]" required>
+  List of company dictionaries with at least `symbol` and `name` fields
+</ParamField>
+
+<ParamField path="mic" type="str" default="XSES">
+  Market Identifier Code ("XSES" for SGX, "XHKG" for HKEX)
+</ParamField>
+
+<ParamField path="delay_per_request" type="float" default={0.1}>
+  Delay in seconds between requests to avoid rate limiting
+</ParamField>
+
+<ParamField path="max_workers" type="int" default={1}>
+  Number of parallel workers (currently only supports 1 for sequential processing)
+</ParamField>
+
+<ParamField path="request_timeout" type="int" default={8}>
+  Request timeout in seconds for each API call
+</ParamField>
+
+<ParamField path="progress_callback" type="callable" optional>
+  Optional callback function `(completed: int, total: int)` for progress updates
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  List of dictionaries with Bloomberg background data for each company
+</ResponseField>
+
+**Example:**
+
+```python
+from sgx_company_list import SGXCompanyFetcher
+from bloomberg_sp_company_list import BloombergSPCompanyFetcher
+
+# Fetch SGX companies
+sgx_fetcher = SGXCompanyFetcher()
+companies = sgx_fetcher.get_company_list()
+
+# Fetch Bloomberg background data
+bloomberg_fetcher = BloombergSPCompanyFetcher()
+
+def progress(completed, total):
+    pct = (completed / total) * 100
+    print(f"Progress: {completed}/{total} ({pct:.1f}%)")
+
+results = bloomberg_fetcher.fetch_background_for_companies(
+    companies,
+    mic="XSES",
+    delay_per_request=0.1,
+    progress_callback=progress
+)
+
+# Process results
+for company in results:
+    if company['fetch_ok']:
+        print(f"{company['symbol']}: {company['name']}")
+        print(f"  Market Cap: {company['market_cap']}")
+        print(f"  Shares: {company['shares_outstanding']}")
+        print(f"  Founded: {company['founded_year']}")
+```
+
+**Result Dictionary Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `symbol` | str | Original stock symbol |
+| `name` | str | Company name |
+| `mic` | str | Market Identifier Code |
+| `bloomberg_ticker` | str \| None | Resolved Bloomberg ticker |
+| `source_url` | str \| None | Bloomberg API URL used |
+| `market_cap` | float \| None | Market capitalization (parsed) |
+| `shares_outstanding` | float \| None | Shares outstanding (parsed) |
+| `founded_year` | int \| None | Year founded (parsed) |
+| `currency` | str \| None | Currency code |
+| `fetch_ok` | bool | Whether fetch was successful |
+
+---
+
+### `get_last_request_debug()`
+
+Get debug information for the last request.
+
+```python
+def get_last_request_debug(self) -> Optional[dict]
+```
+
+<ResponseField name="return" type="Optional[dict]">
+  Dictionary with debug information including URL, status code, error, and response text, or None if no requests made
+</ResponseField>
+
+**Example:**
+
+```python
+fetcher = BloombergSPCompanyFetcher()
+quote = fetcher.fetch_quote("INVALID")
+
+if quote is None:
+    debug = fetcher.get_last_request_debug()
+    if debug:
+        print(f"URL: {debug['url']}")
+        print(f"Status: {debug['status_code']}")
+        print(f"Error: {debug['error']}")
+        print(f"Response (first 500 chars): {debug['response_text'][:500]}")
+```
+
+**Debug Dictionary Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `symbol` | str | Original symbol requested |
+| `ticker` | str | Bloomberg ticker attempted |
+| `url` | str | Full API URL |
+| `status_code` | int \| None | HTTP status code |
+| `error` | str \| None | Error message if failed |
+| `response_text` | str | Response text (up to 8000 chars) |
+
+---
+
+## Private Methods
+
+### `_parse_float()`
+
+Parse various numeric formats to float.
+
+```python
+@staticmethod
+def _parse_float(value: Any) -> Optional[float]
+```
+
+Handles:
+- `None` values
+- Numbers (int, float)
+- Strings with commas (e.g., "1,234.56")
+- Abbreviated numbers (e.g., "123.45M", "5.67B", "890K")
+- Suffixes: K (thousands), M (millions), B (billions), T (trillions)
+
+**Examples:**
+
+```python
+BloombergSPCompanyFetcher._parse_float("1,234.56")      # 1234.56
+BloombergSPCompanyFetcher._parse_float("123.45M")       # 123450000.0
+BloombergSPCompanyFetcher._parse_float("5.67B")        # 5670000000.0
+BloombergSPCompanyFetcher._parse_float("890K")         # 890000.0
+BloombergSPCompanyFetcher._parse_float("invalid")      # None
+```
+
+### `_parse_year()`
+
+Parse year from various formats.
+
+```python
+@staticmethod
+def _parse_year(value: Any) -> Optional[int]
+```
+
+Handles:
+- Integer years (1000-2100)
+- Strings containing years (e.g., "Founded in 1995")
+- Extracts 4-digit years matching pattern `(19|20)\d{2}`
+
+**Examples:**
+
+```python
+BloombergSPCompanyFetcher._parse_year(1995)                # 1995
+BloombergSPCompanyFetcher._parse_year("Founded in 1995")   # 1995
+BloombergSPCompanyFetcher._parse_year("2023")              # 2023
+BloombergSPCompanyFetcher._parse_year("invalid")           # None
+```
+
+### `_find_first_value()`
+
+Recursively search for a value by key in nested structures.
+
+```python
+@staticmethod
+def _find_first_value(payload: Any, keys: set[str]) -> Any
+```
+
+Performs depth-first search through nested dictionaries and lists to find the first non-empty value matching any of the specified keys (case-insensitive).
+
+### `_get_first_dict_value()`
+
+Get the first non-empty value from a dictionary by key list.
+
+```python
+@staticmethod
+def _get_first_dict_value(payload: dict, keys: list[str]) -> Any
+```
+
+Tries each key in order and returns the first non-empty value found.
+
+### `_extract_company_fields()`
+
+Extract and parse company fields from Bloomberg response.
+
+```python
+def _extract_company_fields(self, payload: dict) -> dict
+```
+
+Extracts:
+- Market capitalization (with parsing)
+- Shares outstanding (with parsing)
+- Founded year (with parsing)
+- Currency code
+
+Searches both top-level camelCase fields and nested structures.
+
+### `_build_url()`
+
+Build Bloomberg API URL for a symbol.
+
+```python
+def _build_url(self, symbol: str, suffix: str = "SP") -> str
+```
+
+Generates URL-encoded Bloomberg API endpoint for the ticker.
+
+### `_set_last_request_debug()`
+
+Thread-safe storage of debug information.
+
+```python
+def _set_last_request_debug(self, debug_info: dict) -> None
+```
+
+## Usage Example
+
+Complete example demonstrating the full workflow:
+
+```python
+from sgx_company_list import SGXCompanyFetcher
+from bloomberg_sp_company_list import BloombergSPCompanyFetcher
+import json
+
+# Step 1: Fetch SGX companies
+print("Fetching SGX companies...")
+sgx_fetcher = SGXCompanyFetcher()
+sgx_companies = sgx_fetcher.get_company_list(include_null_companies=False)
+sgx_companies = [c for c in sgx_companies if c.get("symbol")]
+print(f"Found {len(sgx_companies)} SGX symbols")
+
+# Step 2: Fetch Bloomberg background data
+print("\nFetching Bloomberg background data...")
+bloomberg_fetcher = BloombergSPCompanyFetcher()
+
+def progress(current, total):
+    if current % 25 == 0 or current == total:
+        pct = (current / total) * 100
+        print(f"  Progress: {current}/{total} ({pct:.1f}%)")
+
+results = bloomberg_fetcher.fetch_background_for_companies(
+    sgx_companies,
+    mic="XSES",
+    delay_per_request=0.1,
+    request_timeout=8,
+    progress_callback=progress
+)
+
+# Step 3: Analyze results
+with_market_cap = sum(1 for c in results if c.get("market_cap") is not None)
+with_shares = sum(1 for c in results if c.get("shares_outstanding") is not None)
+with_founded = sum(1 for c in results if c.get("founded_year") is not None)
+fetch_success = sum(1 for c in results if c.get("fetch_ok"))
+
+print(f"\nResults Summary:")
+print(f"  Total companies: {len(results)}")
+print(f"  Successful fetches: {fetch_success}")
+print(f"  Market cap coverage: {with_market_cap}/{len(results)} ({with_market_cap/len(results)*100:.1f}%)")
+print(f"  Shares coverage: {with_shares}/{len(results)} ({with_shares/len(results)*100:.1f}%)")
+print(f"  Founded year coverage: {with_founded}/{len(results)} ({with_founded/len(results)*100:.1f}%)")
+
+# Step 4: Export to JSON
+output_file = "bloomberg_companies.json"
+with open(output_file, "w", encoding="utf-8") as f:
+    json.dump(results, f, indent=2, ensure_ascii=False)
+
+print(f"\nData exported to: {output_file}")
+
+# Step 5: Show sample data
+print("\nSample companies with Bloomberg data:")
+for company in results[:5]:
+    if company['fetch_ok']:
+        print(f"\n{company['symbol']}: {company['name']}")
+        print(f"  Bloomberg Ticker: {company['bloomberg_ticker']}")
+        print(f"  Market Cap: {company['market_cap']:,.0f}" if company['market_cap'] else "  Market Cap: N/A")
+        print(f"  Shares Outstanding: {company['shares_outstanding']:,.0f}" if company['shares_outstanding'] else "  Shares: N/A")
+        print(f"  Founded: {company['founded_year']}" if company['founded_year'] else "  Founded: N/A")
+        print(f"  Currency: {company['currency']}" if company['currency'] else "  Currency: N/A")
+```
+
+## Error Handling
+
+The class provides comprehensive error handling:
+
+```python
+fetcher = BloombergSPCompanyFetcher()
+
+# Single quote fetch
+quote = fetcher.fetch_quote("INVALID")
+if quote is None:
+    print("Fetch failed")
+    debug = fetcher.get_last_request_debug()
+    if debug:
+        print(f"Error: {debug['error']}")
+        print(f"Status: {debug['status_code']}")
+
+# Batch fetch with error tracking
+results = fetcher.fetch_background_for_companies(companies)
+failed = [c for c in results if not c['fetch_ok']]
+print(f"Failed fetches: {len(failed)}")
+
+for fail in failed[:5]:
+    print(f"  {fail['symbol']}: No Bloomberg data available")
+```
+
+## Rate Limiting
+
+Adjust `delay_per_request` to control request rate:
+
+```python
+# Conservative (recommended for large datasets)
+results = fetcher.fetch_background_for_companies(
+    companies,
+    delay_per_request=0.2  # 200ms between requests
+)
+
+# Faster (may trigger rate limits)
+results = fetcher.fetch_background_for_companies(
+    companies,
+    delay_per_request=0.05  # 50ms between requests
+)
+```
+
+## Multi-Market Support
+
+The fetcher supports both SGX and HKEX markets:
+
+```python
+fetcher = BloombergSPCompanyFetcher()
+
+# SGX companies
+sgx_results = fetcher.fetch_background_for_companies(
+    sgx_companies,
+    mic="XSES"
+)
+
+# HKEX companies
+hkex_results = fetcher.fetch_background_for_companies(
+    hkex_companies,
+    mic="XHKG"
+)
+```

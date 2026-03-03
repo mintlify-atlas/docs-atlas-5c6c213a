@@ -1,0 +1,369 @@
+---
+title: 'Singapore Exchange (SGX)'
+description: 'Fetch company data from Singapore Exchange official APIs'
+icon: 'dollar-sign'
+---
+
+## Overview
+
+The SGX data source fetches comprehensive company information from the Singapore Exchange official APIs, including financial metrics, sector classifications, and trading status.
+
+<Info>
+  **Data Source**: Official SGX API at `api.sgx.com`
+  
+  **Coverage**: ~600 active companies on SGX mainboard and Catalist
+</Info>
+
+## API Endpoints
+
+The SGX fetcher uses two primary endpoints:
+
+### Stock Screener API
+
+Provides financial metrics and basic company information:
+
+```python
+SCREENER_URL = "https://api.sgx.com/stockscreener/v2.0/all"
+```
+
+**Parameters fetched:**
+- Market capitalization, P/E ratio, price-to-book ratio
+- Dividend yield, sales TTM, net profit margin
+- Return on equity, debt-to-equity ratio
+- Price changes (4-week, 13-week, 26-week, 52-week)
+- Basic sector classification
+
+### Securities API
+
+Provides trading status and suspension information:
+
+```python
+SECURITIES_URL = "https://api.sgx.com/securities/v1.1"
+```
+
+**Used for:**
+- Identifying suspended securities (status = "SUSP")
+- Validating active trading status
+
+### Snapshot Reports API
+
+Provides detailed sector and industry classifications:
+
+```python
+SNAPSHOT_URL = "https://api.sgx.com/snapshotreports/v2.0/countryCode/SGP/stockCode/{symbol}"
+```
+
+## Usage Example
+
+<CodeGroup>
+```python Basic Usage
+from sgx_company_list import SGXCompanyFetcher
+
+# Initialize the fetcher
+fetcher = SGXCompanyFetcher()
+
+# Fetch all active companies (excluding suspended)
+companies = fetcher.get_company_list(include_null_companies=False)
+
+print(f"Found {len(companies)} companies")
+
+# Example company data
+for company in companies[:5]:
+    print(f"{company['symbol']}: {company['name']}")
+    print(f"  Market Cap: {company['market_cap']:,.0f} SGD")
+    print(f"  P/E Ratio: {company['pe_ratio']}")
+    print(f"  Industry: {company['industry']}")
+```
+
+```python With Enrichment
+# Fetch with detailed sector enrichment
+companies = fetcher.get_company_list(include_null_companies=False)
+
+# Enrich with detailed sector/industry data
+def progress(completed, total):
+    print(f"Progress: {completed}/{total}")
+
+enriched = fetcher.enrich_with_sector_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05,
+    progress_callback=progress
+)
+
+# Now includes detailed sector and industry fields
+for company in enriched[:5]:
+    print(f"{company['symbol']}: {company['name']}")
+    print(f"  Industry: {company['industry']}")
+    print(f"  Sector: {company['sector']}")
+```
+
+```python Filter Suspended
+# Get suspension status
+suspension_map, total, suspended = fetcher.get_suspension_status()
+
+print(f"Total securities: {total}")
+print(f"Suspended: {suspended}")
+
+# Filter companies
+active_companies = [
+    c for c in companies 
+    if not c['is_suspended']
+]
+```
+</CodeGroup>
+
+## Data Fields
+
+The SGX fetcher returns normalized company dictionaries with the following fields:
+
+<Tabs>
+  <Tab title="Identification">
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `symbol` | string | Stock code (e.g., "D05") |
+    | `name` | string | Company name |
+    | `exchange` | string | Exchange code |
+    | `exchange_country_code` | string | Country code ("SG") |
+    | `currency` | string | Trading currency (SGD, USD) |
+  </Tab>
+  
+  <Tab title="Market Data">
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `market_cap` | float | Market capitalization in SGD |
+    | `pe_ratio` | float | Price-to-earnings ratio |
+    | `yield_pct` | float | Dividend yield percentage |
+    | `price_to_book_ratio` | float | Price-to-book ratio |
+    | `price_to_cashflow` | float | Price-to-cash-flow ratio |
+  </Tab>
+  
+  <Tab title="Financial Metrics">
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `sales_ttm` | float | Sales trailing twelve months |
+    | `net_profit_margin` | float | Net profit margin percentage |
+    | `return_on_equity` | float | Return on equity percentage |
+    | `debt_to_equity` | float | Debt-to-equity ratio |
+    | `sales_change_pct` | float | Sales percentage change |
+  </Tab>
+  
+  <Tab title="Price Changes">
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `four_week_change_pct` | float | 4-week price change % |
+    | `thirteen_week_change_pct` | float | 13-week price change % |
+    | `twenty_six_week_change_pct` | float | 26-week price change % |
+    | `fifty_two_week_change_pct` | float | 52-week price change % |
+  </Tab>
+  
+  <Tab title="Classification">
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `industry` | string | Industry classification |
+    | `sector` | string | Detailed sector (from snapshot) |
+    | `listing_category` | string | Primary/Secondary listing |
+    | `is_suspended` | boolean | Suspension status |
+  </Tab>
+</Tabs>
+
+## Filtering Logic
+
+The SGX fetcher applies automatic filtering:
+
+```python
+# From sgx_company_list.py:289-314
+companies = fetcher.get_company_list(include_null_companies=False)
+
+initial_count = len(companies)
+
+# Filter out suspended companies
+active_companies = [c for c in companies if not c["is_suspended"]]
+suspended_count = initial_count - len(active_companies)
+
+print(f"Initial count: {initial_count}")
+print(f"Removed (suspended): {suspended_count}")
+print(f"Final count: {len(active_companies)}")
+```
+
+<Note>
+  By default, `include_null_companies=False` excludes companies with null exchange or company name.
+</Note>
+
+## Enrichment Process
+
+The enrichment process fetches detailed sector data for each company:
+
+```python
+# From sgx_company_list.py:153-213
+def enrich_with_sector_details(
+    self,
+    companies: list[dict],
+    max_workers: int = 5,
+    delay_per_request: float = 0.05,
+    progress_callback=None
+) -> list[dict]:
+    """
+    Enrich company list with detailed sector/industry info from snapshot reports.
+    
+    Args:
+        companies: List of company dictionaries to enrich
+        max_workers: Number of parallel workers
+        delay_per_request: Delay between requests to avoid rate limiting
+        progress_callback: Optional callback function for progress updates
+    
+    Returns:
+        Enriched list of companies
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    total = len(companies)
+    completed = 0
+    lock = __import__('threading').Lock()
+    
+    def fetch_and_enrich(company: dict) -> dict:
+        nonlocal completed
+        
+        # Add small delay to avoid rate limiting
+        time.sleep(delay_per_request)
+        
+        symbol = company["symbol"]
+        details = self.fetch_snapshot_report(symbol)
+        
+        if details:
+            company.update({
+                "industry": details.get("sectorName"),
+                "sector": details.get("industryName"),
+            })
+        
+        with lock:
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total)
+        
+        return company
+    
+    # Use ThreadPoolExecutor with rate limiting
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fetch_and_enrich, c): c for c in companies}
+        enriched = []
+        for future in as_completed(futures):
+            enriched.append(future.result())
+    
+    # Sort back by symbol
+    enriched.sort(key=lambda x: x["symbol"])
+    
+    return enriched
+```
+
+<Warning>
+  Enrichment makes additional API calls for each company. For 600 companies with 50ms delay, expect ~30 seconds processing time.
+</Warning>
+
+## Example Response
+
+```json
+{
+  "symbol": "D05",
+  "name": "DBS Group Holdings Ltd",
+  "exchange": "SGX",
+  "exchange_country_code": "SG",
+  "market_cap": 103582000000.0,
+  "pe_ratio": 12.34,
+  "yield_pct": 5.2,
+  "price_to_book_ratio": 1.45,
+  "currency": "SGD",
+  "industry": "Financials",
+  "sector": "Banks",
+  "sales_ttm": 18234567890.0,
+  "net_profit_margin": 34.5,
+  "return_on_equity": 15.2,
+  "price_to_cashflow": 8.5,
+  "debt_to_equity": 0.85,
+  "sales_change_pct": 7.3,
+  "four_week_change_pct": 2.1,
+  "thirteen_week_change_pct": 5.4,
+  "twenty_six_week_change_pct": 12.8,
+  "fifty_two_week_change_pct": 18.3,
+  "is_suspended": false,
+  "listing_category": "Primary Listing"
+}
+```
+
+## Data Quality Statistics
+
+Typical data quality metrics from SGX:
+
+<CardGroup cols={3}>
+  <Card title="Industry Coverage" icon="industry">
+    ~95% of active companies have industry classification
+  </Card>
+  <Card title="Sector Coverage" icon="layer-group">
+    ~90% have detailed sector data after enrichment
+  </Card>
+  <Card title="P/E Ratio Coverage" icon="percent">
+    ~75% have P/E ratio (excludes loss-making companies)
+  </Card>
+</CardGroup>
+
+## Rate Limiting
+
+Recommended rate limiting configuration:
+
+```python
+# Conservative (recommended for production)
+fetcher.enrich_with_sector_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05  # 50ms between requests
+)
+
+# Aggressive (use with caution)
+fetcher.enrich_with_sector_details(
+    companies,
+    max_workers=10,
+    delay_per_request=0.01  # 10ms between requests
+)
+```
+
+<Warning>
+  Aggressive rate limiting may trigger API throttling. Monitor for HTTP 429 errors.
+</Warning>
+
+## Error Handling
+
+```python
+# From sgx_company_list.py:38-59
+def fetch_stock_screener_data(self) -> Optional[dict]:
+    """
+    Fetch stock screener data from SGX API.
+    
+    Returns:
+        Dictionary containing the stock screener response
+    """
+    params = {
+        "params": "exchange,exchangeCountryCode,companyName,..."
+    }
+    
+    try:
+        response = self.session.get(self.SCREENER_URL, params=params, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    
+    except requests.RequestException as e:
+        print(f"Error fetching screener data: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"Error parsing response: {e}")
+        return None
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="HKEX Data Source" icon="money-bill" href="/data-sources/hkex">
+    Learn about Hong Kong Exchange data
+  </Card>
+  <Card title="Bloomberg Enrichment" icon="chart-line" href="/data-sources/bloomberg">
+    Enrich SGX data with Bloomberg backgrounds
+  </Card>
+</CardGroup>

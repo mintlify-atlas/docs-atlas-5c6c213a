@@ -1,0 +1,505 @@
+---
+title: 'HKEXCompanyFetcher'
+description: 'Fetches company list and information from Hong Kong Stock Exchange (HKEX)'
+---
+
+## Overview
+
+The `HKEXCompanyFetcher` class provides methods to fetch comprehensive company data from the Hong Kong Stock Exchange (HKEX) including market capitalization, financial metrics, HSIC industry classifications, and listing information.
+
+## Class Definition
+
+```python
+class HKEXCompanyFetcher:
+    """Fetches company list and information from HKEX."""
+```
+
+## Initialization
+
+### `__init__()`
+
+Initialize the fetcher with default headers and optional webhook URL.
+
+```python
+def __init__(self, webhook_url: Optional[str] = None)
+```
+
+<ParamField path="webhook_url" type="Optional[str]" optional>
+  Custom webhook URL for fetching HKEX data. If not provided, uses `HKEX_STOCKLIST_WEBHOOK_URL` environment variable or default webhook URL.
+</ParamField>
+
+**Example:**
+
+```python
+# Use default webhook URL
+fetcher = HKEXCompanyFetcher()
+
+# Use custom webhook URL
+fetcher = HKEXCompanyFetcher(webhook_url="https://custom.webhook.url")
+
+# Use environment variable
+import os
+os.environ['HKEX_STOCKLIST_WEBHOOK_URL'] = "https://my.webhook.url"
+fetcher = HKEXCompanyFetcher()
+```
+
+The constructor automatically sets up:
+- A requests session with appropriate headers for HKEX API access
+- User agent and security headers for API compatibility
+- Referer set to HKEX market data portal
+- Internal quote token storage for enrichment API calls
+
+## API Endpoints
+
+The class uses:
+
+- `HKEX_STOCKLIST_WEBHOOK_URL`: Custom webhook for fetching company list
+- `QUOTE_URL`: `https://www1.hkex.com.hk/hkexwidget/data/getequityquote`
+
+## Methods
+
+### `fetch_companies_from_webhook()`
+
+Fetch company list from the configured webhook endpoint.
+
+```python
+def fetch_companies_from_webhook(self) -> Optional[dict]
+```
+
+<ResponseField name="return" type="Optional[dict]">
+  Normalized dictionary containing stocklist data with HKEX companies, or None if the request fails
+</ResponseField>
+
+**Example:**
+
+```python
+fetcher = HKEXCompanyFetcher()
+data = fetcher.fetch_companies_from_webhook()
+
+if data:
+    stocklist = data.get("data", {}).get("stocklist", [])
+    print(f"Found {len(stocklist)} companies")
+```
+
+**Notes:**
+- Automatically extracts and stores the quote token for subsequent enrichment calls
+- Normalizes the webhook response to a consistent structure
+- Prints diagnostic information about token availability
+
+---
+
+### `fetch_companies()`
+
+Fetch the list of all companies from HKEX.
+
+```python
+def fetch_companies(
+    self,
+    lang: str = "eng",
+    sort: int = 5,
+    order: int = 0
+) -> Optional[dict]
+```
+
+<ParamField path="lang" type="str" default="eng">
+  Language code: `'eng'` for English, `'chi'` for Chinese
+</ParamField>
+
+<ParamField path="sort" type="int" default={5}>
+  Sort field (5 = by symbol/code)
+</ParamField>
+
+<ParamField path="order" type="int" default={0}>
+  Sort order (0 = ascending, 1 = descending)
+</ParamField>
+
+<ResponseField name="return" type="Optional[dict]">
+  Dictionary containing the company list data
+</ResponseField>
+
+**Example:**
+
+```python
+# Fetch companies in English, sorted by symbol ascending
+data = fetcher.fetch_companies()
+
+# Fetch companies in Chinese
+data = fetcher.fetch_companies(lang="chi")
+```
+
+---
+
+### `fetch_quote_details()`
+
+Fetch detailed quote information for a specific symbol.
+
+```python
+def fetch_quote_details(self, symbol: str, lang: str = "eng") -> Optional[dict]
+```
+
+<ParamField path="symbol" type="str" required>
+  Stock symbol (e.g., "992" for Lenovo, "700" for Tencent)
+</ParamField>
+
+<ParamField path="lang" type="str" default="eng">
+  Language code: `'eng'` for English, `'chi'` for Chinese
+</ParamField>
+
+<ResponseField name="return" type="Optional[dict]">
+  Dictionary containing quote details including industry classifications, or None if fetch failed
+</ResponseField>
+
+**Example:**
+
+```python
+details = fetcher.fetch_quote_details("700")  # Tencent
+
+if details:
+    print(f"Industry: {details['hsic_ind_classification']}")
+    print(f"Sub-sector: {details['hsic_sub_sector_classification']}")
+    print(f"Listing Category: {details['listing_category']}")
+    print(f"Listing Date: {details['listing_date']}")
+    print(f"ISIN: {details['isin']}")
+```
+
+**Quote Details Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `hsic_ind_classification` | str \| None | HSIC industry classification |
+| `hsic_sub_sector_classification` | str \| None | HSIC sub-sector classification |
+| `listing_category` | str \| None | Listing category (e.g., "Main Board", "Trading Only") |
+| `listing_date` | str \| None | Date of listing |
+| `issuer_name` | str \| None | Issuer company name |
+| `summary` | str \| None | Company summary |
+| `chairman` | str \| None | Chairman name |
+| `incorpin` | str \| None | Place of incorporation |
+| `isin` | str \| None | International Securities Identification Number |
+| `lot` | str \| None | Lot size for trading |
+
+**Notes:**
+- Automatically retries once with refreshed token if initial request fails
+- Requires valid quote token from webhook
+- Uses JSONP response parsing
+
+---
+
+### `get_company_list()`
+
+Get the list of all companies with their information.
+
+```python
+def get_company_list(self, include_suspended: bool = True) -> list[dict]
+```
+
+<ParamField path="include_suspended" type="bool" default={true}>
+  Whether to include suspended companies in the results
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  List of company dictionaries with normalized field names
+</ResponseField>
+
+**Example:**
+
+```python
+# Fetch all companies including suspended
+all_companies = fetcher.get_company_list()
+
+# Fetch only active (non-suspended) companies
+active_companies = fetcher.get_company_list(include_suspended=False)
+
+for company in active_companies[:5]:
+    print(f"{company['symbol']}: {company['name']}")
+    print(f"  Market Cap: {company['market_cap']:,.0f} HKD")
+    print(f"  P/E Ratio: {company['pe_ratio']}")
+    print(f"  Suspended: {company['is_suspended']}")
+```
+
+**Company Dictionary Fields:**
+
+Each company dictionary contains the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `symbol` | str | Stock symbol/code (e.g., "700") |
+| `name` | str | Company name |
+| `ric` | str | Reuters Instrument Code |
+| `last_price` | float \| None | Last traded price |
+| `market_cap` | float \| None | Market capitalization in HKD (converted from display format) |
+| `pe_ratio` | float \| None | Price to earnings ratio |
+| `yield_pct` | float \| None | Dividend yield percentage |
+| `price_change_pct` | float \| None | Price change percentage |
+| `net_change` | float \| None | Net price change |
+| `currency` | str | Trading currency code |
+| `asset_subtype` | str | Asset subtype classification |
+| `is_suspended` | bool | Whether the stock is suspended |
+
+**Market Cap Conversion:**
+
+The method automatically converts market cap from display format (e.g., "123.45B") to absolute values:
+- "K" = thousands (× 1,000)
+- "M" = millions (× 1,000,000)
+- "B" = billions (× 1,000,000,000)
+
+---
+
+### `enrich_with_quote_details()`
+
+Enrich company list with detailed quote information including industry classifications.
+
+```python
+def enrich_with_quote_details(
+    self,
+    companies: list[dict],
+    max_workers: int = 5,
+    delay_per_request: float = 0.1,
+    progress_callback=None
+) -> list[dict]
+```
+
+<ParamField path="companies" type="list[dict]" required>
+  List of company dictionaries to enrich
+</ParamField>
+
+<ParamField path="max_workers" type="int" default={5}>
+  Number of parallel workers for concurrent API requests (reduced to avoid rate limiting)
+</ParamField>
+
+<ParamField path="delay_per_request" type="float" default={0.1}>
+  Delay in seconds between requests to avoid rate limiting
+</ParamField>
+
+<ParamField path="progress_callback" type="callable" optional>
+  Optional callback function `(completed: int, total: int)` for progress updates
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  Enriched list of companies with industry classifications and listing details, sorted by symbol
+</ResponseField>
+
+**Example:**
+
+```python
+companies = fetcher.get_company_list(include_suspended=False)
+
+def show_progress(completed, total):
+    pct = (completed / total) * 100
+    print(f"Progress: {completed}/{total} ({pct:.1f}%)")
+
+enriched = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05,
+    progress_callback=show_progress
+)
+
+# Access enriched fields
+for company in enriched:
+    if company.get('industry'):
+        print(f"{company['symbol']}: {company['industry']} - {company['sector']}")
+```
+
+**Enriched Fields:**
+
+Adds the following fields to each company dictionary:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `industry` | str \| None | HSIC industry classification |
+| `sector` | str \| None | HSIC sub-sector classification |
+| `listing_category` | str \| None | Listing category |
+| `listing_date` | str \| None | Date of listing |
+| `isin` | str \| None | ISIN code |
+| `lot` | str \| None | Trading lot size |
+
+---
+
+### `get_last_update_time()`
+
+Get the last update timestamp from the API.
+
+```python
+def get_last_update_time(self) -> Optional[str]
+```
+
+<ResponseField name="return" type="Optional[str]">
+  Last update timestamp string, or None if not available
+</ResponseField>
+
+**Example:**
+
+```python
+last_update = fetcher.get_last_update_time()
+if last_update:
+    print(f"Data last updated: {last_update}")
+```
+
+---
+
+## Private Methods
+
+### `_parse_float()`
+
+Parse a string value to float, handling commas and empty strings.
+
+```python
+def _parse_float(self, value: str) -> Optional[float]
+```
+
+Handles:
+- Empty strings and None values
+- Comma-separated numbers (e.g., "2,227.62")
+- Invalid values (returns None)
+
+### `_parse_jsonp()`
+
+Parse JSONP response to extract JSON data.
+
+```python
+def _parse_jsonp(self, response_text: str, callback_name: str) -> dict
+```
+
+<ParamField path="response_text" type="str" required>
+  The raw JSONP response text
+</ParamField>
+
+<ParamField path="callback_name" type="str" required>
+  The callback function name used in the request
+</ParamField>
+
+Extracts JSON from JSONP format: `callbackName({...})`
+
+### `_generate_callback_name()`
+
+Generate a jQuery-style callback name for JSONP requests.
+
+```python
+def _generate_callback_name(self) -> str
+```
+
+Returns a unique callback name like: `jQuery_1234567890123`
+
+### Other Private Methods
+
+- `_find_stocklist_container()`: Recursively find stocklist in webhook payload
+- `_normalize_hkex_payload()`: Normalize webhook response structure
+- `_extract_token_from_request_url()`: Extract token from URL parameters
+- `_find_token_in_payload()`: Find quote token in webhook response
+
+## Usage Example
+
+Complete example demonstrating the full workflow:
+
+```python
+from hkex_company_list import HKEXCompanyFetcher
+
+# Initialize fetcher
+fetcher = HKEXCompanyFetcher()
+
+# Fetch company list (excluding suspended)
+companies = fetcher.get_company_list(include_suspended=False)
+print(f"Found {len(companies)} active companies")
+
+# Enrich with detailed quote information
+def progress_update(completed, total):
+    pct = (completed / total) * 100
+    bar_len = 40
+    filled = int(bar_len * completed / total)
+    bar = "█" * filled + "░" * (bar_len - filled)
+    print(f"\rProgress: [{bar}] {completed}/{total} ({pct:.1f}%)", end="")
+
+enriched_companies = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05,
+    progress_callback=progress_update
+)
+print()  # New line after progress bar
+
+# Filter out companies without industry classification
+companies_with_industry = [
+    c for c in enriched_companies 
+    if c.get('industry')
+]
+
+# Filter out "Trading Only" listings
+filtered_companies = [
+    c for c in companies_with_industry
+    if c.get('listing_category') != 'Trading Only'
+]
+
+print(f"\nFiltered to {len(filtered_companies)} companies")
+
+# Calculate statistics
+companies_with_mktcap = [c for c in filtered_companies if c['market_cap']]
+total_mktcap = sum(c['market_cap'] for c in companies_with_mktcap)
+print(f"Total market cap: ${total_mktcap / 1e9:.2f}B HKD")
+
+# Find top companies by market cap
+top_companies = sorted(
+    companies_with_mktcap,
+    key=lambda x: x['market_cap'],
+    reverse=True
+)[:10]
+
+print("\nTop 10 companies by market cap:")
+for i, company in enumerate(top_companies, 1):
+    mktcap_b = company['market_cap'] / 1e9
+    print(f"{i}. {company['name']}: ${mktcap_b:.2f}B HKD")
+
+# Industry breakdown
+industries = {}
+for c in filtered_companies:
+    ind = c.get('industry') or 'Unknown'
+    industries[ind] = industries.get(ind, 0) + 1
+
+print("\nTop 5 industries:")
+for ind, count in sorted(industries.items(), key=lambda x: -x[1])[:5]:
+    pct = (count / len(filtered_companies)) * 100
+    print(f"  {ind}: {count} ({pct:.1f}%)")
+```
+
+## Error Handling
+
+All fetch methods return `None` or empty collections on errors:
+
+```python
+data = fetcher.fetch_companies_from_webhook()
+if data is None:
+    print("Failed to fetch data from webhook")
+    # Handle error appropriately
+
+companies = fetcher.get_company_list()
+if not companies:
+    print("No companies found or fetch failed")
+
+details = fetcher.fetch_quote_details("700")
+if details is None:
+    print("Failed to fetch quote details")
+```
+
+## Rate Limiting
+
+When using `enrich_with_quote_details()`, adjust parameters to avoid rate limiting:
+
+- `max_workers`: Lower values (3-5) reduce concurrent load
+- `delay_per_request`: Increase (0.05-0.1s) to space out requests
+
+```python
+# Conservative settings for large datasets
+enriched = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=3,
+    delay_per_request=0.1
+)
+```
+
+## Token Management
+
+The class automatically manages quote tokens:
+
+1. Token is extracted from webhook response during `fetch_companies_from_webhook()`
+2. Token is stored internally in `_quote_token`
+3. Token is automatically refreshed on `fetch_quote_details()` failure
+4. No manual token management required

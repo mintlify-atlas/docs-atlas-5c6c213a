@@ -1,0 +1,503 @@
+---
+title: 'Data Enrichment'
+description: 'Learn how to enrich company data with additional details from exchange APIs and Bloomberg'
+---
+
+## Overview
+
+Enrichment adds detailed information to basic company listings. This includes industry classifications, sector details, financial metrics, and historical data.
+
+## HKEX Enrichment
+
+HKEX enrichment fetches detailed quote information for each company, adding industry classifications and listing details.
+
+### Basic Enrichment
+
+```python
+from hkex_company_list import HKEXCompanyFetcher
+
+fetcher = HKEXCompanyFetcher()
+
+# Get basic company list
+companies = fetcher.get_company_list(include_suspended=False)
+
+print(f"Before enrichment: {len(companies[0].keys())} fields")
+# Example: 12 fields (symbol, name, market_cap, etc.)
+
+# Enrich with quote details
+companies = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05
+)
+
+print(f"After enrichment: {len(companies[0].keys())} fields")
+# Example: 18 fields (added industry, sector, listing_category, etc.)
+```
+
+### Enrichment Fields Added
+
+<Steps>
+  <Step title="Industry Classifications">
+    ```python
+    {
+        "industry": "Financials",
+        "sector": "Banks"
+    }
+    ```
+    
+    - `industry`: HSIC industry classification
+    - `sector`: HSIC sub-sector classification
+  </Step>
+
+  <Step title="Listing Information">
+    ```python
+    {
+        "listing_category": "Primary Listing",
+        "listing_date": "1988-09-28",
+        "isin": "HK0388045442",
+        "lot": 100
+    }
+    ```
+    
+    - `listing_category`: Type of listing (Primary, Secondary, etc.)
+    - `listing_date`: IPO date
+    - `isin`: International Securities Identification Number
+    - `lot`: Board lot size (minimum trading unit)
+  </Step>
+</Steps>
+
+### Progress Tracking
+
+Implement a custom progress callback to monitor enrichment:
+
+```python
+def progress_callback(current, total):
+    pct = (current / total) * 100
+    bar_len = 40
+    filled = int(bar_len * current / total)
+    bar = "█" * filled + "░" * (bar_len - filled)
+    print(f"\r[{bar}] {current}/{total} ({pct:.1f}%)", end="", flush=True)
+
+companies = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05,
+    progress_callback=progress_callback
+)
+print()  # New line after progress bar
+```
+
+Output:
+```
+[████████████████████████████████████████] 2365/2365 (100.0%)
+```
+
+### Rate Limiting Configuration
+
+<Note>
+Adjust `max_workers` and `delay_per_request` to balance speed and API rate limits.
+</Note>
+
+```python
+# Conservative: Slower but safer
+companies = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=3,
+    delay_per_request=0.1
+)
+
+# Aggressive: Faster but may hit rate limits
+companies = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=10,
+    delay_per_request=0.03
+)
+
+# Recommended: Balanced approach
+companies = fetcher.enrich_with_quote_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05
+)
+```
+
+## SGX Enrichment
+
+SGX enrichment fetches detailed sector and industry information from snapshot reports.
+
+### Basic Enrichment
+
+```python
+from sgx_company_list import SGXCompanyFetcher
+
+fetcher = SGXCompanyFetcher()
+
+# Get basic company list
+companies = fetcher.get_company_list(include_null_companies=False)
+
+# Initial industry data comes from stock screener
+print(f"Industry (before): {companies[0].get('industry')}")
+# Example: "Financial Services"
+
+print(f"Sector (before): {companies[0].get('sector')}")
+# Example: None
+
+# Enrich with snapshot report details
+companies = fetcher.enrich_with_sector_details(
+    companies,
+    max_workers=5,
+    delay_per_request=0.05
+)
+
+print(f"Industry (after): {companies[0].get('industry')}")
+# Example: "Financial Services" (refined)
+
+print(f"Sector (after): {companies[0].get('sector')}")
+# Example: "Banks"
+```
+
+### Enrichment Details
+
+The enrichment process:
+
+1. Takes initial `industry` from stock screener API
+2. Fetches snapshot report for each company
+3. Updates with more detailed classifications:
+   - `sectorName` → `industry` (high-level classification)
+   - `industryName` → `sector` (detailed classification)
+
+```python
+def fetch_snapshot_report(self, stock_code: str) -> Optional[dict]:
+    url = f"https://api.sgx.com/snapshotreports/v2.0/countryCode/SGP/stockCode/{stock_code}"
+    params = {
+        "params": "enterpriseValue,returnOnEquity,companyName,stockCode,sectorName,industryName,reportingCurrency,tradedCurrency,currentFiscalYear,currentFiscalYearEndMonth,currencyIdForMarketCap"
+    }
+    # ... fetch and return sectorName, industryName
+```
+
+### Handling Failed Enrichments
+
+If enrichment fails for a company, original values are preserved:
+
+```python
+if details:
+    company.update({
+        "industry": details.get("sectorName"),
+        "sector": details.get("industryName"),
+    })
+else:
+    # Keep existing values if fetch fails
+    pass
+```
+
+## Bloomberg Enrichment
+
+Bloomberg enrichment adds company background data including market cap, shares outstanding, and founding year.
+
+### Basic Enrichment
+
+```python
+from bloomberg_sp_company_list import BloombergSPCompanyFetcher
+from sgx_company_list import SGXCompanyFetcher
+
+# Get SGX companies first
+sgx_fetcher = SGXCompanyFetcher()
+sgx_companies = sgx_fetcher.get_company_list(include_null_companies=False)
+
+# Enrich with Bloomberg data
+bloomberg_fetcher = BloombergSPCompanyFetcher()
+results = bloomberg_fetcher.fetch_background_for_companies(
+    companies=sgx_companies,
+    mic="XSES",  # Market Identifier Code for SGX
+    delay_per_request=0.1,
+    max_workers=1,
+    request_timeout=8
+)
+
+# Filter successful enrichments
+successful = [r for r in results if r.get("fetch_ok")]
+failed = [r for r in results if not r.get("fetch_ok")]
+
+print(f"Successfully enriched: {len(successful)}")
+print(f"Failed: {len(failed)}")
+```
+
+### Enrichment Fields
+
+```python
+{
+    "symbol": "D05",
+    "name": "DBS Group Holdings Ltd",
+    "mic": "XSES",
+    "bloomberg_ticker": "DBS:SP",
+    "source_url": "https://www.bloomberg.com/markets2/api/quote/EQT/DBS:SP",
+    "market_cap": 98500000000.0,  # Parsed from various formats
+    "shares_outstanding": 2700000000.0,
+    "founded_year": 1968,
+    "currency": "SGD",
+    "fetch_ok": True
+}
+```
+
+### Multi-Exchange Support
+
+Enrich both SGX and HKEX companies in one call:
+
+```python
+from hkex_company_list import HKEXCompanyFetcher
+
+# Fetch from both exchanges
+sgx_companies = sgx_fetcher.get_company_list(include_null_companies=False)
+hkex_companies = hkex_fetcher.get_company_list(include_suspended=False)
+
+# Combine for Bloomberg enrichment
+all_companies = []
+
+# Add SGX companies with MIC
+for company in sgx_companies:
+    company["mic"] = "XSES"
+    all_companies.append(company)
+
+# Add HKEX companies with MIC
+for company in hkex_companies:
+    company["mic"] = "XHKG"
+    all_companies.append(company)
+
+# Enrich all at once
+for company in all_companies:
+    mic = company["mic"]
+    symbol = company["symbol"]
+    
+    # Generate ticker candidates
+    candidates = bloomberg_fetcher.ticker_candidates(symbol, mic)
+    
+    payload, matched_ticker = bloomberg_fetcher.fetch_quote_with_candidates(
+        symbol,
+        candidates,
+        timeout=8
+    )
+    
+    if payload:
+        enrichment = bloomberg_fetcher._extract_company_fields(payload)
+        company.update(enrichment)
+```
+
+### Ticker Format Handling
+
+Bloomberg uses different ticker formats for different exchanges:
+
+```python
+def ticker_candidates(self, symbol: str, mic: str) -> list[str]:
+    clean = self.normalize_symbol(symbol)
+    mic_upper = str(mic or "").upper()
+
+    if mic_upper == "XHKG":
+        # Hong Kong: Try both padded and unpadded
+        if clean.isdigit():
+            padded = clean.zfill(4)  # "5" → "0005"
+            return [f"{padded}:HK", f"{clean}:HK"]
+        return [f"{clean}:HK"]
+
+    # Default SGX style
+    return [f"{clean}:SP"]
+```
+
+Examples:
+- SGX symbol `D05` → `D05:SP`
+- HKEX symbol `700` → `0700:HK`, `700:HK`
+- HKEX symbol `992` → `0992:HK`, `992:HK`
+
+## Combined Enrichment Pipeline
+
+Here's a complete example enriching data from all sources:
+
+```python
+from hkex_company_list import HKEXCompanyFetcher
+from sgx_company_list import SGXCompanyFetcher
+from bloomberg_sp_company_list import BloombergSPCompanyFetcher
+import json
+
+def enrich_all_exchanges():
+    # Initialize fetchers
+    hkex_fetcher = HKEXCompanyFetcher()
+    sgx_fetcher = SGXCompanyFetcher()
+    bloomberg_fetcher = BloombergSPCompanyFetcher()
+    
+    # Progress tracker
+    def progress(current, total):
+        pct = (current / total) * 100
+        print(f"  Progress: {current}/{total} ({pct:.1f}%)", flush=True)
+    
+    # HKEX Pipeline
+    print("\n[1/5] Fetching HKEX companies...")
+    hkex_companies = hkex_fetcher.get_company_list(include_suspended=False)
+    print(f"  Found: {len(hkex_companies)} companies")
+    
+    print("\n[2/5] Enriching HKEX with quote details...")
+    hkex_companies = hkex_fetcher.enrich_with_quote_details(
+        hkex_companies,
+        max_workers=5,
+        delay_per_request=0.05,
+        progress_callback=progress
+    )
+    
+    # SGX Pipeline
+    print("\n[3/5] Fetching SGX companies...")
+    sgx_companies = sgx_fetcher.get_company_list(include_null_companies=False)
+    print(f"  Found: {len(sgx_companies)} companies")
+    
+    print("\n[4/5] Enriching SGX with sector details...")
+    sgx_companies = sgx_fetcher.enrich_with_sector_details(
+        sgx_companies,
+        max_workers=5,
+        delay_per_request=0.05,
+        progress_callback=progress
+    )
+    
+    # Bloomberg Pipeline
+    print("\n[5/5] Enriching with Bloomberg data...")
+    
+    # SGX Bloomberg enrichment
+    bloomberg_sgx = bloomberg_fetcher.fetch_background_for_companies(
+        sgx_companies,
+        mic="XSES",
+        delay_per_request=0.1,
+        progress_callback=progress
+    )
+    
+    # HKEX Bloomberg enrichment
+    bloomberg_hkex = bloomberg_fetcher.fetch_background_for_companies(
+        hkex_companies,
+        mic="XHKG",
+        delay_per_request=0.1,
+        progress_callback=progress
+    )
+    
+    # Combine results
+    bloomberg_all = bloomberg_sgx + bloomberg_hkex
+    bloomberg_success = [r for r in bloomberg_all if r.get("fetch_ok")]
+    
+    # Summary
+    print("\n" + "="*80)
+    print("Enrichment Summary")
+    print("="*80)
+    print(f"HKEX companies: {len(hkex_companies)}")
+    print(f"SGX companies: {len(sgx_companies)}")
+    print(f"Bloomberg records: {len(bloomberg_success)}/{len(bloomberg_all)} successful")
+    
+    # Save results
+    with open("hkex_enriched.json", "w") as f:
+        json.dump(hkex_companies, f, indent=2, ensure_ascii=False)
+    
+    with open("sgx_enriched.json", "w") as f:
+        json.dump(sgx_companies, f, indent=2, ensure_ascii=False)
+    
+    with open("bloomberg_enriched.json", "w") as f:
+        json.dump(bloomberg_success, f, indent=2, ensure_ascii=False)
+    
+    return hkex_companies, sgx_companies, bloomberg_success
+
+if __name__ == "__main__":
+    enrich_all_exchanges()
+```
+
+## Data Quality Assessment
+
+After enrichment, assess data quality:
+
+```python
+def assess_data_quality(companies: list[dict], fields: list[str]):
+    total = len(companies)
+    
+    print("\nData Quality Report")
+    print("="*80)
+    
+    for field in fields:
+        not_null = sum(1 for c in companies if c.get(field) is not None)
+        null = total - not_null
+        pct = (not_null / total) * 100 if total > 0 else 0
+        
+        print(f"{field}:")
+        print(f"  ✓ Not Null: {not_null} ({pct:.1f}%)")
+        print(f"  ✗ Null: {null} ({100-pct:.1f}%)")
+
+# Usage
+assess_data_quality(
+    hkex_companies,
+    ["industry", "sector", "listing_category", "isin", "listing_date"]
+)
+
+assess_data_quality(
+    sgx_companies,
+    ["industry", "sector", "market_cap", "pe_ratio"]
+)
+```
+
+Output:
+```
+Data Quality Report
+================================================================================
+industry:
+  ✓ Not Null: 2365 (100.0%)
+  ✗ Null: 0 (0.0%)
+sector:
+  ✓ Not Null: 2365 (100.0%)
+  ✗ Null: 0 (0.0%)
+listing_category:
+  ✓ Not Null: 2365 (100.0%)
+  ✗ Null: 0 (0.0%)
+```
+
+## Error Recovery
+
+Implement retry logic for failed enrichments:
+
+```python
+import time
+
+def enrich_with_retry(fetcher, companies, max_retries=3):
+    enriched = fetcher.enrich_with_quote_details(
+        companies,
+        max_workers=5,
+        delay_per_request=0.05
+    )
+    
+    # Find companies with missing enrichment data
+    failed = [
+        c for c in enriched 
+        if not c.get("industry") or not c.get("sector")
+    ]
+    
+    retry_count = 0
+    while failed and retry_count < max_retries:
+        retry_count += 1
+        print(f"\nRetry {retry_count}/{max_retries} for {len(failed)} companies...")
+        
+        time.sleep(5)  # Wait before retry
+        
+        retry_enriched = fetcher.enrich_with_quote_details(
+            failed,
+            max_workers=3,  # Slower for retry
+            delay_per_request=0.1
+        )
+        
+        # Update original list with retry results
+        retry_map = {c["symbol"]: c for c in retry_enriched}
+        for i, company in enumerate(enriched):
+            if company["symbol"] in retry_map:
+                enriched[i] = retry_map[company["symbol"]]
+        
+        # Check remaining failures
+        failed = [
+            c for c in enriched 
+            if not c.get("industry") or not c.get("sector")
+        ]
+    
+    print(f"\nFinal result: {len(failed)} companies still missing data")
+    return enriched
+```
+
+<Warning>
+Excessive retries can lead to rate limiting. Use exponential backoff for production systems.
+</Warning>
