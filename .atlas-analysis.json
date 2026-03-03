@@ -1,0 +1,86 @@
+{
+  "projectType": "data-platform",
+  "projectName": "Exchanges Metadata",
+  "projectDescription": "A Python data platform for fetching and managing company metadata from major Asian stock exchanges (SGX, HKEX) and Bloomberg.",
+  "theme": "aspen",
+  "primaryColor": "#0F766E",
+  "lightColor": "#14B8A6",
+  "darkColor": "#0D9488",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Data Sources",
+            "pages": [
+              "data-sources/overview",
+              "data-sources/sgx",
+              "data-sources/hkex",
+              "data-sources/bloomberg"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/fetching-data",
+              "guides/database-loading",
+              "guides/data-enrichment",
+              "guides/filtering"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Classes",
+            "pages": [
+              "api/sgx-company-fetcher",
+              "api/hkex-company-fetcher",
+              "api/bloomberg-sp-company-fetcher"
+            ]
+          },
+          {
+            "group": "Database",
+            "pages": [
+              "api/database-loader",
+              "api/data-models"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Fetch company listings from SGX (Singapore Exchange) with market cap, P/E ratios, and sector data",
+    "Retrieve HKEX (Hong Kong Exchange) equities with industry classifications and listing categories",
+    "Enrich company data with Bloomberg market metadata including shares outstanding and founded year",
+    "Load and sync data to MySQL database with configurable table management",
+    "Multi-threaded data enrichment with rate limiting and progress tracking",
+    "Filter suspended companies and trading-only listings automatically"
+  ],
+  "publicApiSurface": [
+    "SGXCompanyFetcher.fetch_stock_screener_data()",
+    "SGXCompanyFetcher.get_company_list(include_null_companies)",
+    "SGXCompanyFetcher.enrich_with_sector_details(companies, max_workers, delay_per_request, progress_callback)",
+    "HKEXCompanyFetcher.fetch_companies(lang, sort, order)",
+    "HKEXCompanyFetcher.fetch_quote_details(symbol, lang)",
+    "HKEXCompanyFetcher.get_company_list(include_suspended)",
+    "HKEXCompanyFetcher.enrich_with_quote_details(companies, max_workers, delay_per_request, progress_callback)",
+    "BloombergSPCompanyFetcher.fetch_quote(symbol, suffix)",
+    "BloombergSPCompanyFetcher.fetch_background_for_companies(companies, mic, delay_per_request, max_workers, request_timeout, progress_callback)",
+    "load_exchange_metadata_mysql.fetch_sgx_companies(enrich)",
+    "load_exchange_metadata_mysql.fetch_hkex_companies(enrich, webhook_url)",
+    "load_exchange_metadata_mysql.fetch_bloomberg_equities(sgx_companies, hkex_companies, max_workers, delay_per_request, request_timeout)"
+  ]
+}
