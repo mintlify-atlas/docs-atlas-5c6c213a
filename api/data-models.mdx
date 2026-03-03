@@ -26,31 +26,99 @@ DEFAULT_TABLES["sgx"] = "companies_xses"
 ### Schema
 
 <ResponseField name="symbol" type="string">
-  Company trading symbol on SGX (e.g., "D05", "C38U"). Used as the primary identifier for the company.
+  Company trading symbol on SGX (e.g., "D05", "C38U"). Primary identifier.
 </ResponseField>
 
 <ResponseField name="name" type="string">
   Full legal or trading name of the company.
 </ResponseField>
 
-<ResponseField name="is_suspended" type="boolean">
-  Indicates whether trading is suspended. Note: Suspended companies are filtered out during fetching, so this field is typically `false` or absent.
+<ResponseField name="exchange" type="string">
+  Exchange identifier (e.g., "SGX").
+</ResponseField>
+
+<ResponseField name="exchange_country_code" type="string">
+  Country code for the exchange.
+</ResponseField>
+
+<ResponseField name="market_cap" type="float">
+  Market capitalization in SGD.
+</ResponseField>
+
+<ResponseField name="pe_ratio" type="float">
+  Price-to-earnings ratio.
+</ResponseField>
+
+<ResponseField name="yield_pct" type="float">
+  Dividend yield percentage.
+</ResponseField>
+
+<ResponseField name="price_to_book_ratio" type="float">
+  Price-to-book ratio.
+</ResponseField>
+
+<ResponseField name="currency" type="string">
+  Trading currency code (e.g., "SGD").
 </ResponseField>
 
 <ResponseField name="industry" type="string">
-  Industry classification (available when enrichment is enabled).
+  Industry/sector classification from screener. Enriched with detailed sectorName from snapshot reports.
 </ResponseField>
 
 <ResponseField name="sector" type="string">
-  Sector classification (available when enrichment is enabled).
+  Detailed industryName from snapshot reports (populated after enrichment).
 </ResponseField>
 
-<ResponseField name="subsector" type="string">
-  Sub-sector classification (available when enrichment is enabled).
+<ResponseField name="sales_ttm" type="float">
+  Trailing twelve months sales.
 </ResponseField>
 
-<ResponseField name="market_cap" type="number">
-  Market capitalization value (available when enrichment is enabled).
+<ResponseField name="net_profit_margin" type="float">
+  Net profit margin percentage.
+</ResponseField>
+
+<ResponseField name="return_on_equity" type="float">
+  Return on average common equity percentage.
+</ResponseField>
+
+<ResponseField name="price_to_cashflow" type="float">
+  Price-to-cash-flow-per-share ratio.
+</ResponseField>
+
+<ResponseField name="debt_to_equity" type="float">
+  Total debt to total equity ratio.
+</ResponseField>
+
+<ResponseField name="sales_change_pct" type="float">
+  Sales percentage change.
+</ResponseField>
+
+<ResponseField name="four_week_change_pct" type="float">
+  4-week price percentage change.
+</ResponseField>
+
+<ResponseField name="thirteen_week_change_pct" type="float">
+  13-week price percentage change.
+</ResponseField>
+
+<ResponseField name="twenty_six_week_change_pct" type="float">
+  26-week price percentage change.
+</ResponseField>
+
+<ResponseField name="fifty_two_week_change_pct" type="float">
+  52-week price percentage change.
+</ResponseField>
+
+<ResponseField name="is_suspended" type="boolean">
+  Whether trading is suspended. Suspended companies are filtered out by default.
+</ResponseField>
+
+<ResponseField name="listing_category" type="string">
+  "Primary Listing" if exchange is present, otherwise null.
+</ResponseField>
+
+<ResponseField name="fetched_at_utc" type="string">
+  ISO timestamp when data was fetched (added by write_table).
 </ResponseField>
 
 ### Data Source
@@ -61,7 +129,8 @@ Fetched using `fetch_sgx_companies()` from `SGXCompanyFetcher`.
 
 When `enrich=True`:
 - Calls `enrich_with_sector_details()` with 5 concurrent workers
-- Adds detailed industry, sector, and subsector classifications
+- Fetches snapshot reports to populate `sector` field with detailed industryName
+- Updates `industry` field with detailed sectorName
 - Delay: 0.05 seconds per request
 
 ### Example Record
@@ -70,11 +139,27 @@ When `enrich=True`:
 {
   "symbol": "D05",
   "name": "DBS Group Holdings Ltd",
-  "is_suspended": false,
+  "exchange": "SGX",
+  "exchange_country_code": "SG",
+  "market_cap": 95234567890.0,
+  "pe_ratio": 12.45,
+  "yield_pct": 4.2,
+  "price_to_book_ratio": 1.35,
+  "currency": "SGD",
   "industry": "Financials",
   "sector": "Banks",
-  "subsector": "Banks",
-  "market_cap": 95000000000,
+  "sales_ttm": 15000000000.0,
+  "net_profit_margin": 28.5,
+  "return_on_equity": 14.2,
+  "price_to_cashflow": 8.3,
+  "debt_to_equity": 0.45,
+  "sales_change_pct": 5.2,
+  "four_week_change_pct": 2.1,
+  "thirteen_week_change_pct": 8.5,
+  "twenty_six_week_change_pct": 12.3,
+  "fifty_two_week_change_pct": 18.7,
+  "is_suspended": false,
+  "listing_category": "Primary Listing",
   "fetched_at_utc": "2026-03-03T10:30:00.123456+00:00"
 }
 ```
@@ -103,31 +188,79 @@ DEFAULT_TABLES["hkex"] = "companies_hkex"
 ### Schema
 
 <ResponseField name="symbol" type="string">
-  Company stock code on HKEX (e.g., "0001", "0700"). Used as the primary identifier for the company.
+  Company stock code on HKEX (e.g., "0001", "0700"). Primary identifier.
 </ResponseField>
 
 <ResponseField name="name" type="string">
   Full company name as registered on HKEX.
 </ResponseField>
 
-<ResponseField name="listing_category" type="string">
-  Category of listing (e.g., "Equity", "Trading Only"). Companies with `listing_category="Trading Only"` are filtered out during fetching.
+<ResponseField name="ric" type="string">
+  Reuters Instrument Code (e.g., "0001.HK").
+</ResponseField>
+
+<ResponseField name="last_price" type="float">
+  Last traded price in HKD.
+</ResponseField>
+
+<ResponseField name="market_cap" type="float">
+  Market capitalization in HKD (calculated from mktcap value and mktcap_u unit).
+</ResponseField>
+
+<ResponseField name="pe_ratio" type="float">
+  Price-to-earnings ratio.
+</ResponseField>
+
+<ResponseField name="yield_pct" type="float">
+  Dividend yield percentage.
+</ResponseField>
+
+<ResponseField name="price_change_pct" type="float">
+  Price change percentage.
+</ResponseField>
+
+<ResponseField name="net_change" type="float">
+  Net price change in HKD.
+</ResponseField>
+
+<ResponseField name="currency" type="string">
+  Trading currency code (typically "HKD").
+</ResponseField>
+
+<ResponseField name="asset_subtype" type="string">
+  Asset subtype (e.g., "ODSH" for ordinary shares).
+</ResponseField>
+
+<ResponseField name="is_suspended" type="boolean">
+  Whether trading is suspended. Suspended companies are filtered out by default.
 </ResponseField>
 
 <ResponseField name="industry" type="string">
-  Industry classification (available when enrichment is enabled). Companies without industry data are filtered out if enrichment provides industry information.
+  HSIC industry classification (populated after enrichment via `enrich_with_quote_details`).
 </ResponseField>
 
 <ResponseField name="sector" type="string">
-  Sector classification (available when enrichment is enabled).
+  HSIC sub-sector classification (populated after enrichment).
 </ResponseField>
 
-<ResponseField name="market_cap" type="number">
-  Market capitalization in HKD (available when enrichment is enabled).
+<ResponseField name="listing_category" type="string">
+  Listing category (populated after enrichment). "Trading Only" listings are filtered out.
 </ResponseField>
 
-<ResponseField name="quote_data" type="object (JSON string)">
-  Additional quote details as a JSON object, serialized to a string. May include real-time pricing, volume, and other trading metrics.
+<ResponseField name="listing_date" type="string">
+  Date of listing on HKEX (populated after enrichment).
+</ResponseField>
+
+<ResponseField name="isin" type="string">
+  International Securities Identification Number (populated after enrichment).
+</ResponseField>
+
+<ResponseField name="lot" type="string">
+  Board lot size for trading (populated after enrichment).
+</ResponseField>
+
+<ResponseField name="fetched_at_utc" type="string">
+  ISO timestamp when data was fetched (added by write_table).
 </ResponseField>
 
 ### Data Source
@@ -138,7 +271,7 @@ Fetched using `fetch_hkex_companies()` from `HKEXCompanyFetcher`.
 
 When `enrich=True`:
 - Calls `enrich_with_quote_details()` with 8 concurrent workers
-- Adds industry, sector, market cap, and real-time quote information
+- Adds industry, sector, listing_category, listing_date, isin, and lot fields
 - Delay: 0.03 seconds per request
 
 ### Filtering Rules
@@ -152,12 +285,23 @@ When `enrich=True`:
 ```json
 {
   "symbol": "0700",
-  "name": "TENCENT HOLDINGS LTD",
-  "listing_category": "Equity",
-  "industry": "Information Technology",
+  "name": "TENCENT",
+  "ric": "0700.HK",
+  "last_price": 385.2,
+  "market_cap": 3678500000000.0,
+  "pe_ratio": 18.45,
+  "yield_pct": 0.35,
+  "price_change_pct": 1.2,
+  "net_change": 4.5,
+  "currency": "HKD",
+  "asset_subtype": "ODSH",
+  "is_suspended": false,
+  "industry": "Technology Hardware & Equipment",
   "sector": "Interactive Media & Services",
-  "market_cap": 3800000000000,
-  "quote_data": "{\"price\": 385.2, \"volume\": 12500000}",
+  "listing_category": "Equity Securities",
+  "listing_date": "2004-06-16",
+  "isin": "KYG875721634",
+  "lot": "100",
   "fetched_at_utc": "2026-03-03T10:30:00.123456+00:00"
 }
 ```
@@ -192,58 +336,46 @@ DEFAULT_TABLES["bloomberg_equities"] = "companies_bloomberg_equities"
   Company trading symbol from the source exchange (SGX or HKEX).
 </ResponseField>
 
-<ResponseField name="ticker" type="string">
-  Bloomberg ticker identifier (e.g., "D05 SP Equity", "700 HK Equity").
+<ResponseField name="name" type="string">
+  Company name from the source exchange.
 </ResponseField>
 
-<ResponseField name="exchange" type="string">
-  Bloomberg exchange code:
+<ResponseField name="mic" type="string">
+  Market Identifier Code:
   - `"XSES"` for Singapore Exchange companies
   - `"XHKG"` for Hong Kong Exchange companies
+</ResponseField>
+
+<ResponseField name="bloomberg_ticker" type="string">
+  Bloomberg ticker format (e.g., "D05:SP", "0700:HK").
+</ResponseField>
+
+<ResponseField name="source_url" type="string">
+  Bloomberg API endpoint URL used to fetch the data.
+</ResponseField>
+
+<ResponseField name="market_cap" type="float">
+  Market capitalization value parsed from Bloomberg data (may include K/M/B/T suffixes).
+</ResponseField>
+
+<ResponseField name="shares_outstanding" type="float">
+  Total shares outstanding parsed from Bloomberg data.
+</ResponseField>
+
+<ResponseField name="founded_year" type="int">
+  Year the company was founded, extracted from Bloomberg data.
+</ResponseField>
+
+<ResponseField name="currency" type="string">
+  Currency code for the company's fundamental data (e.g., "SGD", "HKD").
 </ResponseField>
 
 <ResponseField name="fetch_ok" type="boolean">
   Indicates whether the Bloomberg API request was successful. Only records with `fetch_ok=true` are written to the database.
 </ResponseField>
 
-<ResponseField name="company_name" type="string">
-  Official company name from Bloomberg.
-</ResponseField>
-
-<ResponseField name="description" type="string">
-  Detailed company description and background from Bloomberg.
-</ResponseField>
-
-<ResponseField name="industry" type="string">
-  Bloomberg industry classification.
-</ResponseField>
-
-<ResponseField name="sector" type="string">
-  Bloomberg sector classification.
-</ResponseField>
-
-<ResponseField name="country" type="string">
-  Country of incorporation or headquarters.
-</ResponseField>
-
-<ResponseField name="website" type="string">
-  Company website URL.
-</ResponseField>
-
-<ResponseField name="employees" type="number">
-  Number of employees.
-</ResponseField>
-
-<ResponseField name="founded_year" type="number">
-  Year the company was founded.
-</ResponseField>
-
-<ResponseField name="executives" type="array (JSON string)">
-  List of key executives and officers, serialized as a JSON string. Each executive entry may include name, title, and other details.
-</ResponseField>
-
-<ResponseField name="metadata" type="object (JSON string)">
-  Additional Bloomberg metadata as a JSON object, serialized to a string.
+<ResponseField name="fetched_at_utc" type="string">
+  ISO timestamp when data was fetched (added by write_table).
 </ResponseField>
 
 ### Data Source
@@ -253,30 +385,26 @@ Fetched using `fetch_bloomberg_equities()` from `BloombergSPCompanyFetcher`.
 ### Data Processing
 
 1. **Deduplication**: Input companies are deduplicated by symbol (case-insensitive)
-2. **Exchange Mapping**: 
-   - SGX companies → `XSES` exchange code
-   - HKEX companies → `XHKG` exchange code
-3. **Filtering**: Only records with `fetch_ok=true` are saved to the database
-4. **Serialization**: Complex fields (arrays, objects) are serialized to JSON strings
+2. **MIC Codes**: 
+   - SGX companies → `"XSES"` MIC code
+   - HKEX companies → `"XHKG"` MIC code
+3. **Ticker Generation**: Creates Bloomberg ticker format (symbol + ":" + suffix, e.g., "D05:SP", "0700:HK")
+4. **Filtering**: Only records with `fetch_ok=true` are saved to the database
 
 ### Example Record
 
 ```json
 {
   "symbol": "D05",
-  "ticker": "D05 SP Equity",
-  "exchange": "XSES",
-  "fetch_ok": true,
-  "company_name": "DBS Group Holdings Ltd",
-  "description": "DBS Group Holdings Ltd is a Singapore-based commercial bank...",
-  "industry": "Banking",
-  "sector": "Financials",
-  "country": "Singapore",
-  "website": "https://www.dbs.com",
-  "employees": 32000,
+  "name": "DBS Group Holdings Ltd",
+  "mic": "XSES",
+  "bloomberg_ticker": "D05:SP",
+  "source_url": "https://www.bloomberg.com/markets2/api/quote/EQT/D05%3ASP",
+  "market_cap": 95234567890.0,
+  "shares_outstanding": 2658000000.0,
   "founded_year": 1968,
-  "executives": "[{\"name\": \"Piyush Gupta\", \"title\": \"CEO\"}]",
-  "metadata": "{\"market_cap_usd\": 68000000000}",
+  "currency": "SGD",
+  "fetch_ok": true,
   "fetched_at_utc": "2026-03-03T10:30:00.123456+00:00"
 }
 ```
